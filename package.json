@@ -48,6 +48,8 @@
       "Tools/**/*",
       "Files/**/*",
       "apk/**/*",
+      "TidalLinks.txt",
+      "AppleLinks.txt",
       "patch_work/**/*",
       "pyinstaller_hooks/**/*",
       "node_modules/**/*",
