@@ -4409,12 +4409,16 @@ def _get_tidal_links_file():
     return os.path.join(base, 'TidalLinks.txt')
 
 def _get_random_tidal_link():
-    """Pick a random Tidal link from TidalLinks.txt."""
-    tidal_file = _get_tidal_links_file()
-    if not os.path.exists(tidal_file):
-        return None
-    with open(tidal_file, 'r') as f:
-        links = [l.strip() for l in f if l.strip()]
+    """Pick a random Tidal link from worker_loaded_tidal_links or TidalLinks.txt."""
+    global worker_loaded_tidal_links
+    links = []
+    if worker_loaded_tidal_links:
+        links = worker_loaded_tidal_links[:]
+    if not links:
+        tidal_file = _get_tidal_links_file()
+        if os.path.exists(tidal_file):
+            with open(tidal_file, 'r') as f:
+                links = [l.strip() for l in f if l.strip()]
     if not links:
         return None
     return random.choice(links)
@@ -4528,11 +4532,16 @@ def _get_apple_links_file():
     return os.path.join(base, 'AppleLinks.txt')
 
 def _get_random_apple_link():
-    apple_file = _get_apple_links_file()
-    if not os.path.exists(apple_file):
-        return None
-    with open(apple_file, 'r') as f:
-        links = [l.strip() for l in f if l.strip()]
+    """Pick a random Apple Music link from worker_loaded_apple_links or AppleLinks.txt."""
+    global worker_loaded_apple_links
+    links = []
+    if worker_loaded_apple_links:
+        links = worker_loaded_apple_links[:]
+    if not links:
+        apple_file = _get_apple_links_file()
+        if os.path.exists(apple_file):
+            with open(apple_file, 'r') as f:
+                links = [l.strip() for l in f if l.strip()]
     if not links:
         return None
     return random.choice(links)
