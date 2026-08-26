@@ -5804,6 +5804,10 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
             elapsed = now - app_timers.get(app_key, session_start)
 
             if elapsed >= actual_playtime and now >= app_next_action_time.get(app_key, 0):
+                if app_key not in link_info:
+                    app_timers[app_key] = now
+                    app_next_action_time[app_key] = now + random.uniform(30, 120)
+                    continue
                 worker_streams_done += 1
                 if app_key == 'spotify':
                     worker_streams_done_spotify += 1
