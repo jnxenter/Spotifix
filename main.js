@@ -383,7 +383,22 @@ if (!gotTheLock) {
         proc.on('exit', (code, signal) => {
             console.log(`Backend process exited with code ${code} signal ${signal}`);
             backendProcess = null;
-            // Restart backend if not quitting
+            const restartFlag = path.join(appPath, '_update_restart');
+            let isUpdateRestart = false;
+            try {
+                if (fs.existsSync(restartFlag)) {
+                    isUpdateRestart = true;
+                    fs.unlinkSync(restartFlag);
+                }
+            } catch (e) {}
+            if (isUpdateRestart) {
+                console.log('Update restart detected. Relaunching app...');
+                setTimeout(() => {
+                    app.relaunch({ args: process.argv.slice(1) });
+                    app.exit(0);
+                }, 500);
+                return;
+            }
             if (!app.isQuitting) {
                 console.log('Restarting backend in 3 seconds...');
                 setTimeout(() => {
@@ -621,6 +636,8 @@ if (!gotTheLock) {
     });
 
     app.on('ready', async () => {
+        const restartFlag = path.join(appPath, '_update_restart');
+        try { if (fs.existsSync(restartFlag)) fs.unlinkSync(restartFlag); } catch (e) {}
         killProcessOnPort(8999);
         backendProcess = spawnBackend();
         spawnAIServer();
