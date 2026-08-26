@@ -6681,9 +6681,7 @@ def check_update():
 
 SOURCE_FILES_TO_UPDATE = [
     'api.py', 'renderer.js', 'index.html', 'login.html',
-    'splash.html', 'console.html', 'vide.html',
-    'main.js', 'preload.js', 'package.json',
-    'SpotifyPatcher.py', 'ConsoleLogger.py', 'UtilsService.py', 'keyauth.py'
+    'main.js', 'preload.js', 'package.json'
 ]
 
 
@@ -6697,15 +6695,23 @@ def install_update():
     try:
         import urllib.request
         import urllib.error
+        import ssl
         app_dir = os.path.dirname(os.path.abspath(__file__))
         branch = "main"
         downloaded = []
         failed = []
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
         for fname in SOURCE_FILES_TO_UPDATE:
             raw_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{branch}/{fname}"
             dest = os.path.join(app_dir, fname)
             try:
-                urllib.request.urlretrieve(raw_url, dest)
+                resp = opener.open(raw_url, timeout=30)
+                data = resp.read()
+                with open(dest, 'wb') as f:
+                    f.write(data)
                 downloaded.append(fname)
             except Exception as e:
                 failed.append(f"{fname}: {e}")
