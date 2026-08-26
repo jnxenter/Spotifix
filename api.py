@@ -6741,6 +6741,31 @@ def install_update():
                     f.write(remote_version)
             except Exception:
                 pass
+            bat_path = os.path.join(os.environ.get('TEMP', app_dir), '_spotifix_restart.bat')
+            exe_name = 'Spotifix.exe'
+            try:
+                bat_content = (
+                    '@echo off\r\n'
+                    'timeout /t 3 /nobreak >nul\r\n'
+                    f'taskkill /f /im "{exe_name}" >nul 2>&1\r\n'
+                    f'taskkill /f /im "python.exe" /fi "WINDOWTITLE eq *api*" >nul 2>&1\r\n'
+                    f'if exist "{os.path.join(app_dir, exe_name)}" (\r\n'
+                    f'    start "" "{os.path.join(app_dir, exe_name)}"\r\n'
+                    f') else (\r\n'
+                    f'    start "" "{os.path.join(os.path.dirname(app_dir), exe_name)}"\r\n'
+                    f')\r\n'
+                    f'del /f /q "{flag_path}" >nul 2>&1\r\n'
+                    f'del /f /q "{bat_path}" >nul 2>&1\r\n'
+                )
+                with open(bat_path, 'w') as f:
+                    f.write(bat_content)
+                subprocess.Popen(
+                    ['cmd', '/c', bat_path],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                    close_fds=True
+                )
+            except Exception as e:
+                add_log("WARN", "updater", f"Could not launch restart script: {e}")
             def _restart_app():
                 time.sleep(2)
                 os._exit(0)
