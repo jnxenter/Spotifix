@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.0.1"
+Bot_version = "4.0.2"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5607,6 +5607,7 @@ def _multi_app_start_all(selected_apps_keys, udid, binded_account, binded_proxy,
 
         time.sleep(random.uniform(3.0, 8.0))
 
+    _multi_app_relink_app._link_info = link_info_by_app
     add_log("SUCC", udid, f"[MultiApp] All apps launched on {udid}. Both playing simultaneously.")
     return link_info_by_app
 
