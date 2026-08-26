@@ -316,6 +316,17 @@ if (!gotTheLock) {
         }
     });
 
+    ipcMain.on('restart-app', () => {
+        console.log('Restart requested via IPC. Relaunching...');
+        if (backendProcess && !backendProcess.killed) {
+            treeKill(backendProcess.pid, 'SIGTERM', () => {});
+        }
+        setTimeout(() => {
+            app.relaunch({ args: process.argv.slice(1) });
+            app.exit(0);
+        }, 1000);
+    });
+
     app.on('before-quit', () => {
         console.log('Application is quitting. Terminating backend process...');
         app.isQuitting = true;  // Set a flag indicating app is quitting
