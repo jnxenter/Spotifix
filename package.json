@@ -1,0 +1,78 @@
+{
+  "name": "spotifix",
+  "version": "4.3.0",
+  "description": "Spotifix",
+  "author": "Spotifix",
+  "main": "main.js",
+  "license": "ISC",
+  "dependencies": {
+    "apexcharts": "^3.44.0",
+    "axios": "^1.6.2",
+    "chartjs-adapter-moment": "^1.0.1",
+    "express": "^4.18.3",
+    "find-process": "^1.4.7",
+    "jquery": "^3.7.1",
+    "moment": "^2.30.1",
+    "tree-kill": "^1.2.2"
+  },
+  "build": {
+    "appId": "com.spotifix.program",
+    "productName": "Spotifix",
+    "directories": {
+      "output": "dist"
+    },
+    "asar": false,
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "index.html",
+      "login.html",
+      "splash.html",
+      "console.html",
+      "vide.html",
+      "api.py",
+      "api/_internal/**/*",
+      "api.spec",
+      "opencode.exe",
+      "ConsoleLogger.py",
+      "UtilsService.py",
+      "keyauth.py",
+      "SpotifyPatcher.py",
+      "build.bat",
+      "AGENTS.md",
+      "background.jpg",
+      "repeat_button_cropped.png",
+      "assets/**/*",
+      "Tools/**/*",
+      "Files/**/*",
+      "apk/**/*",
+      "patch_work/**/*",
+      "pyinstaller_hooks/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Spotifix",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    }
+  }
+}
