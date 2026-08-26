@@ -6735,14 +6735,14 @@ def install_update():
                 failed.append(f"{fname}: {e}")
         if not failed:
             add_log("SUCC", "updater", f"Updated {len(downloaded)} files to v{remote_version}. Restarting...")
+            flag_path = os.path.join(app_dir, '_update_restart')
+            try:
+                with open(flag_path, 'w') as f:
+                    f.write(remote_version)
+            except Exception:
+                pass
             def _restart_app():
                 time.sleep(2)
-                try:
-                    exe = sys.executable if hasattr(sys, 'executable') else None
-                    if exe and os.path.exists(exe):
-                        subprocess.Popen([exe] + sys.argv, shell=True)
-                except Exception:
-                    pass
                 os._exit(0)
             threading.Thread(target=_restart_app, daemon=True).start()
             return jsonify({"success": True, "message": f"Updated to v{remote_version}. Restarting...", "downloaded": downloaded})
