@@ -1122,6 +1122,11 @@ document.addEventListener('DOMContentLoaded', () => {
                     .then(data => {
                         if (data.success) {
                             statusDiv.innerHTML = '<p style="color: #2ecc71;">Updated to v' + pendingRemoteVersion + '! Restarting...</p>';
+                            setTimeout(() => {
+                                if (window.electronAPI && window.electronAPI.restartApp) {
+                                    window.electronAPI.restartApp();
+                                }
+                            }, 1500);
                         } else {
                             statusDiv.innerHTML = '<p style="color: red;">Error: ' + (data.error || 'Unknown') + '</p>';
                             installBtn.disabled = false;
