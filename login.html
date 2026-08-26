@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <!-- Add external stylesheet if needed -->
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+  <style>
+
+    html, body {
+      overflow: hidden; /* Hide scrollbars and disable scrolling */
+      width: 100%;
+      height: 100%;
+      margin:0;
+      padding:0;
+      font-family: sans-serif;
+      background-color: transparent;
+      overflow: hidden; /* Hide overflow to prevent scrollbars */
+      color: snow;
+    }
+
+    #content {
+      display: grid;
+      place-items: center;
+      width: 300px;
+      height: 472px;
+      padding: 25px;
+      background-color: #161616;
+      box-shadow: 0px 15px 60px rgba(131, 120, 244, 0.75); /* Adjusted for soft glow */
+      outline: 1px solid #5d5a8f;
+      border-radius: 10px;
+      position: relative;
+      -webkit-app-region: drag; /* Enables dragging */
+    }
+    .button, .form-inp input, button {
+      -webkit-app-region: no-drag;
+    }
+
+    #title-bar {
+      position: absolute;
+      top: 0;
+      right: 0;
+      padding: 5px;
+      display: flex;
+      justify-content: flex-end;
+      background-color: transparent; /* Keep background transparent or adjust as necessary */
+      width: auto; /* Let it size according to its children */
+    }
+
+    #title-bar-btns {
+      -webkit-app-region: no-drag;
+    }
+
+    #title-bar-btns button {
+      background-color: #212121; /* Keep your original button color */
+      color: white;
+      border: none;
+      padding: 5px 10px;
+      margin-left: 5px; /* Space between buttons */
+      border-radius: 2px;
+      outline: none;
+      box-shadow: none;
+    }
+
+    #min-btn:hover, #close-btn:hover {
+      background-color: #666; /* Hover effect for better interaction */
+    }
+
+    #close-btn {
+      background-color: #d00; /* Distinct color for the close button */
+    }
+
+    #close-btn:hover {
+      background-color: #e00; /* Brighter red on hover */
+    }
+
+    #form-ui {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh; /* Use viewport height to ensure full vertical centering */
+      padding: 0;
+      margin: 0;
+    }
+
+    #form-body {
+      width: 230px; /* Adjust if necessary */
+      padding: 25px; /* Optional, for internal spacing */
+    }
+
+    #welcome-lines {
+      text-align: center;
+      line-height: 1;
+    }
+
+    #welcome-line-1 img {
+      width: 100px; /* Adjust the width as necessary */
+      height: auto; /* Maintain aspect ratio */
+    }
+
+    #welcome-line-2 {
+      color: #ffffff;
+      font-size: 18px;
+      margin-top: 17px;
+    }
+
+    #input-area {
+      margin-top: 40px;
+    }
+
+    .form-inp {
+      position: relative;
+      padding: 11px 25px 11px 11px; /* Added right padding to prevent overlap */
+      background: transparent;
+      border: 1px solid #e3e3e3;
+      line-height: 1;
+      border-radius: 8px;
+    }
+
+    .form-inp:focus {
+      border: 1px solid #8378f4;
+    }
+
+    .form-inp:first-child {
+      margin-bottom: 15px;
+    }
+
+    .form-inp input {
+      width: 100%;
+      background: none;
+      font-size: 13.4px;
+      color: #8378f4;
+      border: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .form-inp input:focus {
+      outline: none;
+    }
+
+    #submit-button-cvr {
+      margin-top: 20px;
+    }
+
+    #submit-button {
+      display: block;
+      width: 100%;
+      color: #8378f4;
+      background-color: transparent;
+      font-weight: 600;
+      font-size: 14px;
+      margin: 0;
+      padding: 14px 13px 12px 13px;
+      border: 0;
+      outline: 1px solid #8378f4;
+      border-radius: 8px;
+      line-height: 1;
+      cursor: pointer;
+      transition: all ease-in-out .3s;
+    }
+
+    #submit-button:hover {
+      transition: all ease-in-out .3s;
+      background-color: #8378f4;
+      color: #161616;
+      cursor: pointer;
+    }
+
+    #forgot-pass {
+      text-align: center;
+      margin-top: 10px;
+    }
+
+    #forgot-pass a {
+      color: #868686;
+      font-size: 12px;
+      text-decoration: none;
+    }
+
+    .password-toggle {
+      position: absolute;
+      right: 10px; /* Right alignment */
+      top: 50%; /* Center vertically */
+      transform: translateY(-50%);
+      color: gray; /* Default color when password is hidden */
+      cursor: pointer;
+      transition: color 0.3s ease;
+    }
+
+    .password-toggle.active {
+      color: white; /* Color when password is visible */
+    }
+
+    .success-icon, .error-icon {
+      font-size: 24px;
+      display: inline-block;
+      margin-right: 10px;
+      vertical-align: middle;
+      animation: fadeIn 0.5s;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    .success-icon::before {
+      font-family: 'Font Awesome 5 Free'; /* Font Awesome font-family */
+      content: "\f00c"; /* Font Awesome Unicode for check mark */
+      font-weight: 900; /* Necessary for solid icons */
+      color: rgba(121, 255, 164, 0.6); /* Customizable color */
+    }
+
+    .error-icon::before {
+      font-family: 'Font Awesome 5 Free'; /* Font Awesome font-family */
+      content: "\f00d"; /* Font Awesome Unicode for times mark */
+      font-weight: 900; /* Necessary for solid icons */
+      color: rgba(255, 62, 62, 0.6); /* Customizable color */
+    }
+
+    .checkbox-group {
+      margin: 20px 0;
+      color: #fff; /* Ensures text stays white */
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+    }
+
+    .checkbox-group input[type="checkbox"] {
+      margin-right: 10px;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+      width: 20px;
+      height: 20px;
+      border: 2px solid #fff; /* White border */
+      border-radius: 4px; /* Slightly rounded corners for the checkbox */
+      outline: none;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .checkbox-group input[type="checkbox"]:checked {
+      color: #8378f4; /* Purple border for consistency */
+    }
+
+    /* Remove the tick mark from the checkbox */
+    .checkbox-group input[type="checkbox"]:checked::after {
+      content: none; /* This will not show the tick mark */
+    }
+
+    .checkbox-wrapper-46 input[type="checkbox"] {
+      display: none;
+      visibility: hidden;
+    }
+
+    .checkbox-wrapper-46 .cbx {
+      margin: auto;
+      -webkit-user-select: none;
+      user-select: none;
+      cursor: pointer;
+    }
+    .checkbox-wrapper-46 .cbx span {
+      display: inline-block;
+      vertical-align: middle;
+      transform: translate3d(0, 0, 0);
+    }
+    .checkbox-wrapper-46 .cbx span:first-child {
+      position: relative;
+      width: 15px;
+      height: 15px;
+      border-radius: 3px;
+      transform: scale(1);
+      vertical-align: middle;
+      border: 1px solid #9098a9;
+      transition: all 0.2s ease;
+    }
+    .checkbox-wrapper-46 .cbx span:first-child svg {
+      position: absolute;
+      top: 3px;
+      left: 2px;
+      fill: none;
+      stroke: #ffffff;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-dasharray: 16px;
+      stroke-dashoffset: 16px;
+      transition: all 0.3s ease;
+      transition-delay: 0.1s;
+      transform: translate3d(0, 0, 0);
+    }
+    .checkbox-wrapper-46 .cbx span:first-child:before {
+      content: "";
+      width: 100%;
+      height: 100%;
+      background: #8378f4;
+      display: block;
+      transform: scale(0);
+      opacity: 1;
+      border-radius: 50%;
+    }
+    .checkbox-wrapper-46 .cbx span:last-child {
+      padding-left: 8px;
+    }
+    .checkbox-wrapper-46 .cbx:hover span:first-child {
+      border-color: #8378f4;
+    }
+
+    .checkbox-wrapper-46 .inp-cbx:checked + .cbx span:first-child {
+      background: #8378f4;
+      border-color: #8378f4;
+      animation: wave-46 0.4s ease;
+    }
+    .checkbox-wrapper-46 .inp-cbx:checked + .cbx span:first-child svg {
+      stroke-dashoffset: 0;
+    }
+    .checkbox-wrapper-46 .inp-cbx:checked + .cbx span:first-child:before {
+      transform: scale(3.5);
+      opacity: 0;
+      transition: all 0.6s ease;
+    }
+
+    @keyframes wave-46 {
+      50% {
+        transform: scale(0.9);
+      }
+    }
+
+    #social-login {
+      text-align: center;
+      margin-top: 15px; /* Adjust the margin as needed */
+    }
+
+    #social-login a {
+      color: #868686; /* Same gray as the 'Forgot password?' link */
+      font-size: 20px; /* Icon size, adjust as needed */
+      text-decoration: none;
+      transition: color 0.3s ease;
+    }
+
+    #social-login a:hover {
+      color: #ffffff; /* Lighter color on hover for visibility */
+    }
+
+  </style>
+</head>
+<body>
+<div id="form-ui" class="login-box">
+  <div id="content">
+    <div id="title-bar">
+      <div id="title-bar-btns">
+        <button id="min-btn">-</button>
+        <button id="close-btn">x</button>
+      </div>
+    </div>
+    <div id="form-body">
+      <div id="welcome-lines">
+        <div id="welcome-line-1">
+          <img src="assets/logo.png" alt="Spotifix Logo">
+        </div>
+      </div>
+      <div id="input-area">
+        <div class="form-inp">
+          <input style="-webkit-app-region: no-drag;" placeholder="Username" id="email" type="text">
+        </div>
+        <div style="-webkit-app-region: no-drag;" class="form-inp">
+          <input placeholder="Password" id="password" type="password">
+          <i class="fas fa-eye password-toggle" id="password-toggle"></i>
+        </div>
+      </div>
+      <div style="-webkit-app-region: no-drag;" class="checkbox-group">
+        <div class="checkbox-wrapper-46">
+          <input type="checkbox" id="stay-logged-in" class="inp-cbx" checked />
+          <label for="stay-logged-in" class="cbx"
+          ><span>
+        <svg viewBox="0 0 12 10" height="10px" width="12px">
+          <polyline points="1.5 6 4.5 9 10.5 1"></polyline></svg></span
+          ><span>Stay logged in</span>
+          </label>
+        </div>
+      </div>
+      <div id="responseMessage" style="display: none;"></div>
+      <div id="submit-button-cvr">
+        <button style="-webkit-app-region: no-drag;" id="submit-button" type="submit">Login</button>
+      </div>
+      <div style="-webkit-app-region: no-drag; margin-top: 5px; font-size: 12px; color: #888;" id="forgot-pass">
+        Spotifix 4.3.0
+      </div>
+
+    </div>
+  </div>
+</div>
+<script src="renderer.js"></script>
+</body>
+</html>
