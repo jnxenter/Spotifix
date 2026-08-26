@@ -6660,9 +6660,13 @@ def check_update():
     try:
         import urllib.request
         import urllib.error
+        import ssl
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
         req = urllib.request.Request(url, headers={"User-Agent": "Spotifix-Updater"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
             data = json.loads(resp.read().decode())
         remote_tag = data.get("tag_name", "").lstrip("v")
         remote_notes = data.get("body", "")
