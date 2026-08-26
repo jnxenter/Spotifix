@@ -1,7 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 // Define allowed channels for send and receive to ensure security
-const validSendChannels = ['toggle-console', 'toggle-always-on-top', 'minimize-app', 'close-app', 'send-token', 'login-attempt', 'login-success'];
+const validSendChannels = ['toggle-console', 'toggle-always-on-top', 'minimize-app', 'close-app', 'send-token', 'login-attempt', 'login-success', 'restart-app'];
 const validReceiveChannels = ['console-toggled', 'token-received', 'login-response', 'ai-progress'];
 const validInvokeChannels = ['ai-status', 'ai-chat', 'ai-reset'];
 
@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         if (validSendChannels.includes('close-app')) {
             ipcRenderer.send('close-app');
         }
+    },
+    restartApp: () => {
+        ipcRenderer.send('restart-app');
     },
     sendTokenToRenderer: (token) => {
         if (validSendChannels.includes('send-token')) {
