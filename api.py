@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.3.0"
+Bot_version = "4.0.0"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -1592,7 +1592,7 @@ def start_stop_bot():
             worker_threads.clear()
             worker_bot_running = False
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('Spotifix 4.3.0 - [Console Logs]')
+            ConsoleLogger.log_array.append('Spotifix 4.0.0 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -3296,7 +3296,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "Spotifix 4.3.0"
+                            "text": "Spotifix 4.0.0"
                         }
                     }
                 ],
