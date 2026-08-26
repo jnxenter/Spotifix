@@ -1,0 +1,1566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SpotiFix 4.3.0</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.0"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background-color: #000000;
+            color: #ffffff;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden;
+        }
+        body::-webkit-scrollbar,
+        .some-scrollable-element::-webkit-scrollbar {
+            display: none; /* Completely hides the scrollbar */
+        }
+
+        /* Ensure scrolling is still possible */
+        body,
+        .some-scrollable-element {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+        }
+
+        .title-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+            height: 40px;
+            -webkit-app-region: drag; /* Makes the title bar draggable */
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+            border-bottom: 1px solid #303030; /* Light gray outline */
+        }
+
+        .title-bar .background-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: url('background.jpg') no-repeat center center/cover;
+            filter: blur(4px);
+            z-index: -1;
+        }
+
+        .title-bar .title {
+            font-size: 16px;
+            color: #ffffff;
+            margin-left: 10px; /* Ensures the title is slightly padded from the left edge */
+            display: flex;
+            align-items: center; /* Center align the items */
+        }
+
+        .title-bar .beta {
+            font-size: 16px;
+            font-weight: 600;
+            margin-left: 10px;
+            background: linear-gradient(to right, #9f9f9f 0, #fff 50%, #868686 100%);
+            background-size: 200%;
+            background-position: 0% 50%;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: shine 5s infinite linear;
+            -webkit-text-size-adjust: none;
+            white-space: nowrap;
+            font-family: "Poppins", sans-serif;
+        }
+
+        @keyframes shine {
+            0% {
+                background-position: 200% 50%;
+            }
+            100% {
+                background-position: -200% 50%;
+            }
+        }
+
+        .title-bar-buttons {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-right: 10px;
+        }
+
+        .title-bar-buttons button {
+            background-color: transparent;
+            border: none;
+            color: #ffffff;
+            padding: 5px 10px;
+            cursor: pointer;
+            -webkit-app-region: no-drag; /* Makes the buttons non-draggable */
+        }
+
+        .title-bar-buttons button:hover {
+            background-color: #555555;
+        }
+
+        /* Sidebar styling */
+        #sidebar {
+            width: 210px;
+            background-color: #121212;
+            padding: 20px;
+            position: fixed;
+            top: 40px; /* Adjusted for custom title bar */
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            border-right: 1px solid #303030; /* Light gray outline */
+        }
+
+        .sidebar-logo {
+            width: 80%; /* Adjust width as needed */
+            height: auto;
+            margin-bottom: 20px; /* Space between the logo and the buttons */
+        }
+
+
+        #sidebar ul {
+            list-style: none;
+            padding: 0;
+            width: 100%;
+            flex-grow: 1;
+        }
+
+        #sidebar li {
+            margin-bottom: 10px;
+        }
+
+        #sidebar button {
+            width: 100%;
+            padding: 12px;
+            font-size: 17px;
+            background-color: #1e1e1e;
+            color: #fff;
+            border: 1px solid #4f4f4f;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+        }
+
+        #sidebar button:hover {
+            background-color: #555;
+        }
+
+        #sidebar button.active {
+            background: linear-gradient(135deg, #d1d1d1, #2e2e2e);
+        }
+
+        #main-content {
+            margin-left: 250px;
+            padding: 20px;
+            background-color: #0d0d0d;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            height: calc(100vh - 40px);
+            overflow: hidden;
+        }
+
+        .content-tab {
+            display: none;
+            flex-grow: 1;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .content-tab.active {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+        }
+
+        .content-tab-scrollable {
+            display: none;
+            flex: 1;
+            min-height: 0;
+            width: 100%;
+            overflow-y: auto;
+            scrollbar-width: none;
+        }
+
+        #home.content-tab-scrollable.active { gap: 12px; padding-bottom: 10px; }
+
+        .content-tab-scrollable.active {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            width: 100%;
+            padding-bottom: 40px;
+        }
+
+        /* Hide scrollbar for WebKit browsers (Chrome, Safari, etc.) */
+        .content-tab-scrollable::-webkit-scrollbar {
+            display: none; /* Hide scrollbar */
+        }
+
+        .card {
+            background-color: #1a1a1a;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+            border: 1px solid #303030;
+            position: relative;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 10px;
+        }
+        .login-help {
+            font-size: 0.9rem;
+            color: #aaa;
+            margin-bottom: 1rem;
+        }
+        .login-help code {
+            background: #222;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        #loadConfigButton {
+            margin-top: 10px;
+            padding: 8px 12px;
+            background-color: #333333;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        #loadConfigButton:hover {
+            background-color: #555555;
+        }
+
+        .card-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .small-cards-container {
+            display: flex;
+            gap: 20px;
+            justify-content: space-between;
+        }
+
+        .card-small {
+            flex: 1;
+        }
+
+        .card-config {
+            flex: 1;
+        }
+
+        .card-stats {
+            flex: 1.9;
+        }
+
+        .card-large {
+            flex-grow: 1;
+            overflow: auto;
+            margin-bottom: 2.5rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 10px;
+            background-color: #1a1a1a;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #303030; /* Light gray outline */
+        }
+
+        th, td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #888; /* Light gray outline */
+        }
+
+        th {
+            background-color: #333333;
+            color: #ffffff;
+            font-weight: bold;
+        }
+
+        td {
+            background-color: #1a1a1a;
+            color: #dddddd;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        thead th:first-child {
+            border-top-left-radius: 8px;
+        }
+
+        thead th:last-child {
+            border-top-right-radius: 8px;
+        }
+
+        tbody tr:last-child td:first-child {
+            border-bottom-left-radius: 8px;
+        }
+
+        tbody tr:last-child td:last-child {
+            border-bottom-right-radius: 8px;
+        }
+
+        select, button[type="button"], input[type="file"] {
+            padding: 10px;
+            margin: 5px 0;
+            background-color: #333333;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+            width: 100%;
+        }
+
+        #batch-content {
+            outline: none;
+            resize: none; /* Optionally disable resizing */
+            box-shadow: none; /* Removes any shadow outline */
+            border: 1px solid #333333; /* Add a custom border if needed */
+            background-color: #1a1a1a; /* Ensure it matches your theme */
+            color: #ffffff; /* Text color */
+            padding: 10px;
+            border-radius: 4px;
+        }
+
+
+        button[type="button"]:hover, select:hover, input[type="file"]:hover {
+            background-color: #555555;
+        }
+
+        .start-button {
+            background-color: #28a745!important;
+        }
+
+        .start-button:hover {
+            background-color: #218838!important;
+        }
+
+        .stop-button {
+            background-color: #dc3545!important;
+        }
+
+        .stop-button:hover {
+            background-color: #c82333!important;
+        }
+
+        input[type="text"], input[type="number"], input[type="url"], select {
+            padding: 5px;
+            margin: 5px 0;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            border: 1px solid #333333;
+            border-radius: 4px;
+            width: calc(100% - 10px);
+            max-width: 250px; /* Adjust this to make inputs smaller */
+        }
+
+        label {
+            display: block;
+            margin-top: 10px;
+            color: #ffffff;
+        }
+
+        .statistics-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #4f4f4f, #2e2e2e);
+            border-radius: 8px;
+            padding: 10px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #ffffff;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+        }
+
+        #showConsole {
+            background-color: transparent;
+            border: none;
+            color: #ffffff;
+            cursor: pointer;
+            font-weight: bold;
+            padding: 5px 10px;
+            text-align: center;
+            width: 100%;
+            transition: none; /* Disable transition */
+        }
+
+        #showConsole:hover {
+            background-color: transparent; /* Ensure the background doesn't change on hover */
+        }
+
+
+        .stat-card p {
+            margin: 0;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .stat-card span {
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .batch-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            margin: 10px 0;
+            background-color: #333333;
+            border-radius: 5px;
+            border: 1px solid #303030;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+        }
+
+        .batch-card input[type="text"] {
+            flex: 1;
+            background-color: transparent;
+            border: none;
+            color: #dddddd;
+        }
+
+        .batch-card .button-group {
+            display: flex;
+            gap: 5px; /* Space between the buttons */
+        }
+
+        .batch-card button {
+            padding: 5px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .batch-card .edit-button {
+            background-color: #28a745; /* A green that matches the theme */
+            color: #ffffff;
+        }
+
+        .batch-card .edit-button:hover {
+            background-color: #218838; /* Darker green for hover state */
+        }
+
+
+        .batch-card .delete-button {
+            background-color: #dc3545;
+            color: #ffffff;
+        }
+
+        .batch-card .delete-button:hover {
+            background-color: #c82333;
+        }
+
+        .boton-elegante {
+            padding: 8px 15px;
+            border: 2px solid #2c2c2c;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 20px;
+            transition: all 0.4s ease;
+            outline: none;
+            position: relative;
+            overflow: hidden;
+            font-weight: bold;
+        }
+
+        .boton-elegante::after {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(
+                    circle,
+                    rgba(255, 255, 255, 0.25) 0%,
+                    rgba(255, 255, 255, 0) 70%
+            );
+            transform: scale(0);
+            transition: transform 0.5s ease;
+        }
+
+        .boton-elegante:hover::after {
+            transform: scale(4);
+        }
+
+        .boton-elegante:hover {
+            border-color: #666666;
+            background: #292929;
+        }
+
+        .add-batch-button {
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            background-color: #28a745;
+            color: #ffffff;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 18px;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+        }
+
+        /* Modal styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.9);
+            padding-top: 60px;
+        }
+
+        .modal-content {
+            background-color: #1a1a1a;
+            margin: 5% auto;
+            padding: 20px;
+            border: 1px solid #303030;
+            width: 80%;
+            max-width: 500px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+            color: #ffffff;
+        }
+
+        .modal-content h2 {
+            color: #ffffff;
+            margin-bottom: 20px;
+        }
+
+        .modal-content .form-group {
+            margin-bottom: 15px;
+        }
+
+        .modal-content input[type="text"],
+        .modal-content textarea,
+        .modal-content input[type="file"] {
+            width: calc(100% - 20px);
+            padding: 10px;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            border: 1px solid #333333;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+
+        .modal-content button {
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #333333;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .modal-content button:hover {
+            background-color: #555555;
+        }
+
+        .close {
+            color: #aaaaaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+
+        .close:hover,
+        .close:focus {
+            color: #ffffff;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+
+        .config-selection-container {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .config-selection-container select {
+            flex-grow: 1;
+        }
+        .config-load-container {
+            display: block;
+            gap: 10px; /* Spacing between elements */
+            margin-bottom: 20px; /* Space below the container */
+        }
+
+        .config-load-container select,
+        .config-load-container button {
+            flex-grow: 0; /* Prevents the elements from stretching */
+            width: auto; /* Ensures they take up only as much space as needed */
+        }
+
+        .config-load-container select {
+            min-width: 200px; /* Adjust the minimum width as necessary */
+        }
+
+        .config-load-container button {
+            padding: 8px 12px;
+            background-color: #333333;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+
+        .config-load-container button:hover {
+            background-color: #555555;
+        }
+
+
+
+        .analytics-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .date-picker {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .date-picker label {
+            margin: 0;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 397px;
+            width: 873px;
+        }
+
+        .dash-app-card {
+            background: #1a1a2e;
+            border: 1px solid #333;
+            border-radius: 10px;
+            padding: 1.4rem 1.6rem;
+        }
+        .dash-app-card.playing { border-left: 4px solid #1DB954; }
+        .dash-app-card.paused { border-left: 4px solid #f59e0b; }
+        .dash-app-card.stopped { border-left: 4px solid #ef4444; }
+        .dash-app-card .dash-device-header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 0.6rem; padding-bottom: 0.5rem; border-bottom: 1px solid #333;
+        }
+        .dash-app-card .dash-device-name { font-weight: 700; font-size: 1.1em; }
+        .dash-app-card .dash-device-udid { color: #666; font-size: 0.8em; font-family: monospace; }
+        .dash-app-card .dash-app-row { display: flex; align-items: center; gap: 0.8rem; padding: 0.5rem 0; }
+        .dash-app-card .dash-app-dot {
+            width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0;
+        }
+        .dash-app-card .dash-app-dot.playing { background: #1DB954; box-shadow: 0 0 6px #1DB954; }
+        .dash-app-card .dash-app-dot.paused { background: #f59e0b; }
+        .dash-app-card .dash-app-dot.stopped { background: #ef4444; }
+        .dash-app-card .dash-app-name { font-weight: 600; font-size: 1em; min-width: 100px; }
+        .dash-app-card .dash-app-song { color: #ccc; font-size: 0.9em; flex: 1; }
+        .dash-app-card .dash-app-state {
+            font-size: 0.8em; font-weight: 600; padding: 2px 8px; border-radius: 4px;
+            background: rgba(255,255,255,0.05);
+        }
+        .dash-app-card .dash-stats-row {
+            display: flex; gap: 1.5rem; margin-top: 0.5rem; padding-top: 0.5rem;
+            border-top: 1px solid #2a2a3e; font-size: 0.8em; color: #888;
+        }
+        .dash-app-card .dash-stats-row span { color: #ccc; font-weight: 600; }
+        .total-streams {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 18px;
+        }
+
+        #threadsTable { font-size: 1.05em; width: 100%; table-layout: auto; }
+        #threadsTable th, #threadsTable td { padding: 8px 6px; white-space: nowrap; }
+        #threadsTable th:nth-child(1), #threadsTable td:nth-child(1) { font-size: 1em; }
+        #threadsTable th:nth-child(2), #threadsTable td:nth-child(2) { font-size: 1em; }
+        #threadsTable th:nth-child(3), #threadsTable td:nth-child(3) { font-size: 1em; }
+        #threadsTable th:nth-child(n+4), #threadsTable td:nth-child(n+4) { font-size: 0.95em; text-align: center; }
+
+        #threadsTable tbody tr { min-height: 50px; line-height: 1.5; }
+        #threadsTable th { font-size: 1.05em; }
+        #threadsTable { max-width: 100%; }
+
+        .card-large { min-height: 250px; }
+
+        .dash-device-name { font-size: 1.3em !important; }
+        .dash-app-card .dash-app-name { font-size: 1.05em; min-width: 110px; }
+        .dash-app-card .dash-app-song { font-size: 0.92em; }
+        .dash-app-card .dash-device-udid { font-size: 0.82em; }
+        .dash-app-card { padding: 1rem 1.2rem; }
+
+        #loadingModal {
+            display: none;
+            position: fixed;
+            z-index: 2;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.75);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #loadingModal .modal-content {
+            position: relative;
+            background-color: #333;
+            padding: 20px;
+            border: 1px solid #888;
+            border-radius: 10px;
+            color: #fff;
+        }
+
+        #loadingModal .close {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #aaa;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        #loadingModal .close:hover {
+            color: #fff;
+        }
+
+        .blurred {
+            filter: blur(5px);
+        }
+
+        #ConsoleCard:hover {
+            background-color: #292929; /* Change background color on hover */
+            transform: scale(1.02); /* Slightly scale up the card on hover */
+        }
+        button, input {
+            outline: none;
+        }
+
+        #showConsole, .boton-elegante, .batch-card input[type="text"] {
+            outline: none;
+        }
+        #scrapeDevicesButton {
+            position: relative;
+            top: 10px;
+            left: 10px;
+            margin-bottom: 10px; /* Add some space between button and table */
+        }
+
+        #loginAllButton {
+            position: relative;
+            top: 10px;
+            left: 10px;
+            margin-bottom: 10px; /* Add some space between button and table */
+        }
+
+        #checkLoggedInAllButton {
+            position: relative;
+            top: 10px;
+            left: 10px;
+            margin-bottom: 10px; /* Add some space between button and table */
+        }
+
+        #patchSpotifyButton {
+            position: relative;
+            top: 10px;
+            left: 10px;
+            margin-bottom: 10px; /* Add some space between button and table */
+        }
+
+        .blurred {
+            filter: blur(5px);
+        }
+
+        #loadingSpinner {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 1000; /* Ensure the spinner is on top */
+            background: rgba(0, 0, 0, 0.75); /* Optional background overlay */
+            color: #ffffff;
+            padding: 20px;
+            border-radius: 10px;
+            display: none; /* Hidden by default */
+        }
+
+        /* Chat tab (IA) */
+        #chat.content-tab-scrollable.active {
+            flex: 0 0 auto !important;
+            height: calc(100vh - 61px);
+            overflow: hidden;
+        }
+
+        #chat .chat-input-row {
+            flex-wrap: nowrap;
+            margin-bottom: 24px;
+        }
+
+        #chat .chat-input-row .boton-elegante {
+            flex: 0 0 auto !important;
+            width: auto !important;
+        }
+
+        #chat #chatInput {
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+            width: auto !important;
+        }
+
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            gap: 12px;
+        }
+
+        .chat-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #9b9b9b;
+        }
+
+        .chat-status .dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background-color: #e0a800;
+        }
+
+        .chat-status .dot.ready {
+            background-color: #a855f7;
+        }
+
+        .chat-status .dot.error {
+            background-color: #e74c3c;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            padding: 4px;
+        }
+
+        .chat-msg {
+            max-width: 78%;
+            padding: 10px 14px;
+            border-radius: 12px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        .chat-msg.user {
+            align-self: flex-end;
+            background-color: #a855f7;
+            color: #000000;
+            border-bottom-right-radius: 4px;
+        }
+
+        .chat-msg.assistant {
+            align-self: flex-start;
+            background-color: #1a1a1a;
+            border: 1px solid #303030;
+            border-bottom-left-radius: 4px;
+        }
+
+        .chat-msg.error {
+            align-self: flex-start;
+            background-color: #2a1212;
+            border: 1px solid #5c1a1a;
+            color: #ff8a8a;
+        }
+
+        .chat-msg .role-label {
+            display: block;
+            font-size: 11px;
+            font-weight: bold;
+            margin-bottom: 4px;
+            color: #9b9b9b;
+            text-transform: uppercase;
+        }
+
+        .chat-msg.user .role-label {
+            color: #4c1d95;
+        }
+
+        .chat-input-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .chat-input-row textarea {
+            flex: 1;
+            min-height: 52px;
+            max-height: 140px;
+            resize: none;
+            padding: 10px 12px;
+            background-color: #1a1a1a;
+            color: #ffffff;
+            border: 1px solid #303030;
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+        }
+
+        .chat-input-row textarea:focus {
+            border-color: #a855f7;
+        }
+
+        .chat-input-row .boton-elegante {
+            padding: 10px 18px;
+            border-color: #a855f7;
+            background-color: #a855f7;
+            color: #000000;
+        }
+
+        .chat-input-row .boton-elegante:hover {
+            background: #9333ea;
+            border-color: #9333ea;
+        }
+
+        .chat-input-row .boton-elegante:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            border-color: #2c2c2c;
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+
+        .chat-reset {
+            border-color: #303030;
+            background-color: #1a1a1a;
+            color: #ffffff;
+        }
+
+        .chat-thinking {
+            align-self: flex-start;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 6px;
+            max-width: 100%;
+            padding: 10px 14px;
+            border-radius: 12px;
+            background-color: #1a1a1a;
+            border: 1px solid #303030;
+            color: #9b9b9b;
+            font-size: 13px;
+        }
+
+        .chat-thinking .thinking-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .chat-thinking .thinking-progress {
+            white-space: pre-wrap;
+            word-break: break-word;
+            color: #c7c7c7;
+            font-size: 12px;
+            max-height: 140px;
+            overflow-y: auto;
+        }
+
+        .chat-thinking .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid #303030;
+            border-top-color: #a855f7;
+            border-radius: 50%;
+            animation: chat-spin 0.8s linear infinite;
+        }
+
+        @keyframes chat-spin {
+            to { transform: rotate(360deg); }
+        }
+
+    </style>
+</head>
+<body>
+<div class="title-bar">
+    <div class="background-image"></div>
+    <div class="title">
+        <span style="margin-left: 10px;">Spotifix 4.3.0</span>
+    </div>
+    <div class="title-bar-buttons" style="display: flex; align-items: center;">
+        <button id="minimize-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="16" height="16" fill="#ffffff">
+                <path d="M32 416c-17.7 0-32 14.3-32 32s14.3 32 32 32l448 0c17.7 0 32-14.3 32-32s-14.3-32-32-32L32 416z"/>
+            </svg>
+        </button>
+        <button id="close-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512" width="16" height="16" fill="#ffffff">
+                <path d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/>
+            </svg>
+        </button>
+    </div>
+</div>
+<div id="sidebar">
+    <img src="assets/logo.png" alt="Logo" class="sidebar-logo">
+    <ul>
+        <li><button id="homeBtn">Home</button></li>
+        <li><button id="loginBtn">Login</button></li>
+        <li><button id="devicesBtn">Devices</button></li>
+        <li><button id="manageBtn">Manage</button></li>
+        <li><button id="configBtn">Config</button></li>
+        <li><button id="analyticsBtn">Analytics</button></li>
+        <li><button id="settingsBtn">Settings</button></li>
+        <li><button id="chatBtn">IA</button></li>
+    </ul>
+</div>
+<div id="main-content">
+    <div id="home" class="content-tab-scrollable active">
+        <div class="small-cards-container">
+            <div class="card card-small">
+                <h2>Config Selection</h2>
+                <label for="configSelect">Select Config:</label>
+                <div class="config-selection-container">
+                    <select id="configSelect"></select>
+                    <button type="button" id="startStopButton" style="width: 30%!important;" class="start-button">Start</button>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-top: 1rem;">
+                    <div class="stat-card" style="flex: 1; display: flex; justify-content: center;">
+                        <p>Time Running: <span id="timeRunning">00:00:00</span></p>
+                    </div>
+                    <div class="stat-card" style="flex: 1; display: flex; justify-content: center;" id="ConsoleCard">
+                        <button id="showConsole">
+                            Open Console
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="card card-small">
+                <h2>Statistics</h2>
+                <div class="statistics-grid">
+                    <div class="stat-card">
+                        <p>Devices Connected: <span id="devicesConnected">0</span></p>
+                    </div>
+                    <div class="stat-card">
+                        <p>Successful Logins: <span id="successfulLogins">0</span></p>
+                    </div>
+                    <div class="stat-card">
+                        <p>Streams Done: <span id="streamsDone">0</span></p>
+                        <p style="margin:2px 0 0 0;font-size:0.85em;color:#aaa;">├ Spotify: <span id="streamsDoneSpotify">0</span></p>
+                        <p style="margin:2px 0 0 0;font-size:0.85em;color:#aaa;">├ Tidal: <span id="streamsDoneTidal">0</span></p>
+                        <p style="margin:2px 0 0 0;font-size:0.85em;color:#aaa;">└ Apple Music: <span id="streamsDoneApple">0</span></p>
+                    </div>
+                    <div class="stat-card">
+                        <p>Failed Logins: <span id="failedLogins">0</span></p>
+                    </div>
+                    <div class="stat-card">
+                        <p>Song Likes: <span id="songLikesDone">0</span></p>
+                    </div>
+                    <div class="stat-card">
+                        <p>Album Likes: <span id="albumLikesDone">0</span></p>
+                    </div>
+                    <div class="stat-card">
+                        <p>Follows: <span id="followsDone">0</span></p>
+                    </div>
+                    <div class="stat-card">
+                        <p>Bot Errors: <span id="botErrors">0</span></p>
+                    </div>
+                    <div class="stat-card">
+                        <p>Proxy Errors: <span id="proxyErrors">0</span></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="card card-large">
+            <h2>Live Dashboard</h2>
+            <div id="dashboardStatus" style="margin-bottom:0.4rem;font-size:0.95em;color:#aaa;">Bot: <span id="dashBotStatus">Stopped</span></div>
+            <div id="dashStreamsInfo" style="margin-bottom:0.8rem;font-size:0.85em;color:#888;font-family:monospace;"></div>
+            <div id="dashboardApps" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(550px,1fr));gap:1.2rem;min-height:500px;"></div>
+        </div>
+        <div class="card card-large">
+            <table id="threadsTable">
+                <thead>
+                <tr>
+                    <th>UDID</th>
+                    <th>App</th>
+                    <th>Status</th>
+                    <th>Streams</th>
+                    <th>Likes</th>
+                    <th>Follows</th>
+                    <th>Errors</th>
+                    <th>Session time</th>
+                </tr>
+                </thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+    <div id="login" class="content-tab-scrollable">
+        <div class="card card-large">
+            <h2>Login Spotify</h2>
+            <p class="login-help">Loguea teléfonos con cuentas de Spotify. Se aceptan varios modos de numeración,
+                por ejemplo: <code>del 1 al 34</code>, <code>1-34</code>, <code>1,3,5,7,11,34,66</code>,
+                <code>1 3 5 7</code> o combinaciones como <code>1-10, 20, 25-30</code>.</p>
+            <div class="form-group">
+                <label for="loginPhonesInput">Número de celulares a loguear:</label>
+                <input type="text" id="loginPhonesInput" placeholder="Ej: del 1 al 34  o  1,3,5,7,11,34,66">
+            </div>
+            <div class="form-group">
+                <label for="loginAccountsBatch">Cuentas Spotify (Batch de Manage):</label>
+                <select id="loginAccountsBatch"></select>
+            </div>
+            <div class="form-group">
+                <button id="runPhonesLoginButton" class="boton-elegante">Iniciar Login</button>
+            </div>
+            <div class="form-group">
+                <button id="runPhonesLoginAllButton" class="boton-elegante">Loguear todos</button>
+            </div>
+            <div id="phonesLoginResult" style="margin-top: 1rem;"></div>
+        </div>
+        <div class="card card-large">
+            <h2>Login Tidal</h2>
+            <p class="login-help">Loguea teléfonos con cuentas de Tidal.</p>
+            <div class="form-group">
+                <label for="loginPhonesInputTidal">Número de celulares a loguear:</label>
+                <input type="text" id="loginPhonesInputTidal" placeholder="Ej: del 1 al 34  o  1,3,5,7,11,34,66">
+            </div>
+            <div class="form-group">
+                <label for="loginAccountsBatchTidal">Cuentas Tidal (Batch de Manage):</label>
+                <select id="loginAccountsBatchTidal"></select>
+            </div>
+            <div class="form-group">
+                <button id="runPhonesLoginButtonTidal" class="boton-elegante">Iniciar Login</button>
+            </div>
+            <div id="phonesLoginResultTidal" style="margin-top: 1rem;"></div>
+        </div>
+        <div class="card card-large">
+            <h2>Login Apple Music</h2>
+            <p class="login-help">Loguea teléfonos con cuentas de Apple Music.</p>
+            <div class="form-group">
+                <label for="loginPhonesInputApple">Número de celulares a loguear:</label>
+                <input type="text" id="loginPhonesInputApple" placeholder="Ej: del 1 al 34  o  1,3,5,7,11,34,66">
+            </div>
+            <div class="form-group">
+                <label for="loginAccountsBatchApple">Cuentas Apple Music (Batch de Manage):</label>
+                <select id="loginAccountsBatchApple"></select>
+            </div>
+            <div class="form-group">
+                <button id="runPhonesLoginButtonApple" class="boton-elegante">Iniciar Login</button>
+            </div>
+            <div id="phonesLoginResultApple" style="margin-top: 1rem;"></div>
+        </div>
+    </div>
+    <div id="devices" class="content-tab-scrollable">
+        <div class="card card-large">
+            <button id="scrapeDevicesButton" class="boton-elegante">Scrape Devices</button>
+            <button id="patchSpotifyButton" class="boton-elegante">Fix Screen</button>
+            <h2 id="scrapeDevicesLen">Connected Devices: 0</h2>
+            <table id="devicesTable">
+                <thead>
+                    <tr>
+                        <th>UDID</th>
+                        <th>Manufacturer</th>
+                        <th>Model</th>
+                        <th>Binded Account</th>
+                        <th>Binded Proxy</th>
+                        <th>Controls</th>
+                        <th>Logged in</th> <!-- New Column -->
+                    </tr>
+                </thead>                
+                <tbody>
+                    <!-- Device rows will be dynamically inserted here -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div id="manage" class="content-tab-scrollable">
+        <div class="card">
+            <h2>Manage Spotify</h2>
+            <div class="form-group">
+                <label for="batch-type">Select Batch Type:</label>
+                <select id="batch-type">
+                    <option value="accounts">Accounts</option>
+                    <option value="proxies">Proxies</option>
+                    <option value="links">Links</option>
+                </select>
+            </div>
+            <div id="batch-list"></div>
+            <div class="add-batch-button" id="addBatchButton">+</div>
+        </div>
+        <div class="card">
+            <h2>Manage Tidal</h2>
+            <div class="form-group">
+                <label for="batch-type-tidal">Select Batch Type:</label>
+                <select id="batch-type-tidal">
+                    <option value="tidal_links">Links</option>
+                    <option value="tidal_accounts">Accounts</option>
+                </select>
+            </div>
+            <div id="batch-list-tidal"></div>
+            <div class="add-batch-button" id="addBatchButtonTidal">+</div>
+        </div>
+        <div class="card">
+            <h2>Manage Apple Music</h2>
+            <div class="form-group">
+                <label for="batch-type-apple">Select Batch Type:</label>
+                <select id="batch-type-apple">
+                    <option value="apple_links">Links</option>
+                    <option value="apple_accounts">Accounts</option>
+                </select>
+            </div>
+            <div id="batch-list-apple"></div>
+            <div class="add-batch-button" id="addBatchButtonApple">+</div>
+        </div>
+    </div>
+    <div id="config" class="content-tab-scrollable">
+        <div class="form-group config-load-container">
+            <select id="configDropdown" class="config-dropdown"></select>
+            <button type="button" id="loadConfigButton">Load Config</button>
+        </div>
+        <div class="card-container">
+            <div class="card">
+                <h2>Applications</h2>
+                <p style="font-size:12px;color:#aaa;margin-bottom:8px;">Select which music apps to stream simultaneously on each device.</p>
+                <div class="form-group" style="display:flex;gap:16px;flex-wrap:wrap;">
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="app-spotify" name="app-spotify" checked> Spotify
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="app-apple-music" name="app-apple-music"> Apple Music
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+                        <input type="checkbox" id="app-tidal" name="app-tidal"> Tidal
+                    </label>
+                </div>
+            </div>
+            <div class="card">
+                <h2>Main Settings</h2>
+                <div class="form-group">
+                    <label for="config-name">Config Name:</label>
+                    <input type="text" id="config-name" name="config-name">
+                </div>
+                <div class="form-group">
+                    <label for="streams-to-do">Streams to Do:</label>
+                    <input type="number" id="streams-to-do" name="streams-to-do" value="0">
+                </div>
+                <div class="form-group">
+                    <label for="album-likes-rate">Album Likes to Do (% rate):</label>
+                    <input type="number" id="album-likes-rate" name="album-likes-rate" value="0">
+                </div>
+                <div class="form-group">
+                    <label for="song-likes-rate">Song Likes to Do (% rate):</label>
+                    <input type="number" id="song-likes-rate" name="song-likes-rate" value="0">
+                </div>
+                <div class="form-group">
+                    <label for="follows-rate">Follows to Do (% rate):</label>
+                    <input type="number" id="follows-rate" name="follows-rate" value="0">
+                </div>
+                <div class="form-group">
+                    <label for="full-playtime-rate">Full playtime (% rate):</label>
+                    <input type="number" id="full-playtime-rate" name="full-playtime-rate" value="0">
+                </div>
+                <div class="form-group" id="playtime-seconds-group">
+                    <label for="playtime-seconds">Playtime to Do (seconds):</label>
+                    <input type="text" id="playtime-seconds" name="playtime-seconds" placeholder="E.g., 5-10 (Global default)">
+                </div>
+                <div class="form-group" id="spotify-playtime-group">
+                    <label for="spotify-playtime">Spotify Playtime (seconds):</label>
+                    <input type="text" id="spotify-playtime" name="spotify-playtime" placeholder="E.g., 30-60 (overrides global)">
+                </div>
+                <div class="form-group" id="tidal-playtime-group">
+                    <label for="tidal-playtime">Tidal Playtime (seconds):</label>
+                    <input type="text" id="tidal-playtime" name="tidal-playtime" placeholder="E.g., 30-60 (overrides global)">
+                </div>
+                <div class="form-group" id="apple-playtime-group">
+                    <label for="apple-playtime">Apple Music Playtime (seconds):</label>
+                    <input type="text" id="apple-playtime" name="apple-playtime" placeholder="E.g., 30-60 (overrides global)">
+                </div>
+                <div class="form-group">
+                    <label for="streaming-mode-only">Streaming mode only (Doesnt set login and Ignores binded variables, only loads link and streams)</label>
+                    <input type="checkbox" id="streaming-mode-only" name="streaming-mode-only">
+                </div>
+            </div>
+            <div class="card">
+                <h2>Spotify Links</h2>
+                <div class="form-group">
+                    <label for="links-select">Select Links Batch:</label>
+                    <select id="links-select"></select>
+                </div>
+                <div class="form-group">
+                    <label for="shuffle-perc">Percentage to Shuffle Songs:</label>
+                    <input type="number" id="shuffle-perc" name="shuffle-perc" value="0">
+                </div>
+                <div class="form-group">
+                    <label for="search-links-perc">Percentage to Search Links:</label>
+                    <input type="number" id="search-links-perc" name="search-links-perc" value="0">
+                </div>
+            </div>
+            <div class="card">
+                <h2>Tidal Links</h2>
+                <div class="form-group">
+                    <label for="tidal-links-select">Select Links Batch:</label>
+                    <select id="tidal-links-select"></select>
+                </div>
+                <div class="form-group">
+                    <label for="tidal-shuffle-perc">Percentage to Shuffle Songs:</label>
+                    <input type="number" id="tidal-shuffle-perc" name="tidal-shuffle-perc" value="0">
+                </div>
+                <div class="form-group">
+                    <label for="tidal-search-links-perc">Percentage to Search Links:</label>
+                    <input type="number" id="tidal-search-links-perc" name="tidal-search-links-perc" value="0">
+                </div>
+            </div>
+            <div class="card">
+                <h2>Apple Music Links</h2>
+                <div class="form-group">
+                    <label for="apple-links-select">Select Links Batch:</label>
+                    <select id="apple-links-select"></select>
+                </div>
+                <div class="form-group">
+                    <label for="apple-shuffle-perc">Percentage to Shuffle Songs:</label>
+                    <input type="number" id="apple-shuffle-perc" name="apple-shuffle-perc" value="0">
+                </div>
+                <div class="form-group">
+                    <label for="apple-search-links-perc">Percentage to Search Links:</label>
+                    <input type="number" id="apple-search-links-perc" name="apple-search-links-perc" value="0">
+                </div>
+            </div>
+            <div class="card">
+                <h2>Sessions</h2>
+                <div class="form-group">
+                    <label for="session-time">Session time:</label>
+                    <input type="text" id="session-time" name="session-time" placeholder="E.g., 1-3 (In hours)">
+                </div>
+            </div>
+            <div class="card">
+                <h2>Webhook Settings</h2>
+                <div class="form-group">
+                    <label for="use-webhook">Use Webhook for Statistics:</label>
+                    <input type="checkbox" id="use-webhook" name="use-webhook" checked>
+                </div>
+                <div id="webhook-section" style="display: none;">
+                    <div class="form-group">
+                        <label for="webhook-name">Webhook Name:</label>
+                        <input type="text" id="webhook-name" name="webhook-name" value="Spotifix">
+                    </div>
+                    <div class="form-group">
+                        <label for="webhook-url">Webhook URL:</label>
+                        <input type="url" id="webhook-url" name="webhook-url" value="https://discord.com/api/webhooks/1523001520021311549/9g_zwcTqObB0ohyZwWPMynS_io1RZjQcTft2VyNok7xcvLe-3J6J1jw85wfhf_KmScZQ">
+                    </div>
+                    <div class="form-group">
+                        <label for="webhook-interval">Webhook Send Interval (in minutes):</label>
+                        <input type="number" id="webhook-interval" name="webhook-interval" value="30">
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <button type="button" id="saveConfigButton" style="margin-bottom: 1.5rem;">Save Config</button>
+            </div>
+        </div>
+    </div>
+    <div id="analytics" class="content-tab">
+        <h1>Analytics</h1>
+        <div class="card card-large">
+            <h2>Streams Done Over Time</h2>
+            <div class="analytics-container">
+                <div class="date-picker">
+                    <label for="startDate">Start Date:</label>
+                    <input type="date" id="startDate" name="startDate">
+                </div>
+                <div class="date-picker">
+                    <label for="endDate">End Date:</label>
+                    <input type="date" id="endDate" name="endDate">
+                </div>
+            </div>
+            <div class="chart-container" style="margin-left: 130px;">
+                <canvas id="streamsChart"></canvas>
+            </div>
+            <div class="total-streams" id="totalStreamsText"></div>
+        </div>
+    </div>
+    <div id="settings" class="content-tab-scrollable">
+        <h1>Settings</h1>
+        <div class="card card-large">
+            <h2>Main Settings</h2>
+            <form id="settingsForm">
+                <label for="api-key">Capsolver API Key:</label>
+                <input type="text" id="api-key" name="api-key">
+            </form>
+        </div>
+        <div class="card card-large">
+            <h2>Install Apps</h2>
+            <p class="login-help">Instala APKs en teléfonos seleccionados. Se aceptan varios modos de numeración,
+                por ejemplo: <code>del 1 al 34</code>, <code>1-34</code>, <code>1,3,5,7</code>,
+                <code>1 3 5 7</code> o combinaciones como <code>1-10, 20, 25-30</code>.</p>
+            <div class="form-group">
+                <label for="installPhonesInput">Teléfonos (numeración Panda):</label>
+                <input type="text" id="installPhonesInput" placeholder="Ej: del 1 al 10  o  1,3,5,7">
+            </div>
+            <div class="form-group" style="display:flex; gap:1.5rem; flex-wrap:wrap;">
+                <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                    <input type="checkbox" id="installSpotifyCheck" checked> Spotify
+                </label>
+                <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                    <input type="checkbox" id="installTidalCheck" checked> Tidal
+                </label>
+                <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                    <input type="checkbox" id="installAppleCheck" checked> Apple Music
+                </label>
+            </div>
+            <div class="form-group">
+                <button id="installAppsButton" class="boton-elegante">Instalar en seleccionados</button>
+            </div>
+            <div id="installAppsResult" style="margin-top: 1rem;"></div>
+        </div>
+        <div class="card card-large">
+            <h2>Update</h2>
+            <p class="login-help" id="updateCurrentVersion">Current version: 4.3.0</p>
+            <div id="updateStatus" style="margin-bottom: 1rem; min-height: 24px;"></div>
+            <div class="form-group">
+                <button id="checkUpdateButton" class="boton-elegante">Check for Updates</button>
+            </div>
+            <div id="updateResult" style="margin-top: 1rem;"></div>
+            <div id="updateNotesSection" style="display:none; margin-top: 1rem;">
+                <h3 style="margin-bottom: 0.5rem;">Release Notes:</h3>
+                <div id="updateNotes" style="background:#1a1a2e; padding:10px; border-radius:6px; max-height:200px; overflow-y:auto; font-size:13px; white-space:pre-wrap;"></div>
+            </div>
+            <div class="form-group" style="margin-top: 1rem;">
+                <button id="installUpdateButton" class="boton-elegante" style="display:none; background:#2ecc71;">Install Update</button>
+            </div>
+        </div>
+    </div>
+    <div id="chat" class="content-tab-scrollable">
+        <div class="chat-container">
+            <div class="chat-status">
+                <span class="dot" id="chatStatusDot"></span>
+                <span id="chatStatusText">Iniciando IA...</span>
+            </div>
+            <div class="chat-messages" id="chatMessages"></div>
+            <div class="chat-input-row">
+                <textarea id="chatInput" placeholder="Pregúntame o pídeme algo de la app, los dispositivos, login, actualizaciones..." rows="2"></textarea>
+                <button type="button" id="chatSendButton" class="boton-elegante">Enviar</button>
+                <button type="button" id="chatResetButton" class="boton-elegante chat-reset">Nueva conversación</button>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- Modal for Editing Device Information -->
+<div id="batchModal" class="modal">
+    <div class="modal-content">
+        <span class="close" id="batchModalCloseButton">&times;</span>
+        <h2 id="batchModalTitle">Add New Batch</h2>
+        <div class="form-group">
+            <label for="batch-name">Batch Name:</label>
+            <input type="text" id="batch-name">
+        </div>
+        <div class="form-group">
+            <label for="batch-content">Batch Content:</label>
+            <textarea id="batch-content" rows="5"></textarea>
+            <input type="file" id="batch-file" accept=".txt">
+        </div>
+        <button type="button" id="batchModalSaveButton">Save</button>
+        <button type="button" id="batchModalCancelButton">Cancel</button>
+    </div>
+</div>
+
+<div id="loadingModal">
+    <div class="modal-content">
+        <span class="close" id="loadingModalCloseButton">&times;</span>
+        <p id="loadingText">Loading...</p>
+    </div>
+</div>
+<!-- Modal for Editing Device Information -->
+<div id="deviceModal" class="modal">
+    <div class="modal-content">
+        <span class="close">&times;</span>
+        <h2>Edit Device Information</h2>
+        <div class="form-group">
+            <label for="modalBindedAccount">Binded Account:</label>
+            <input type="text" id="modalBindedAccount">
+        </div>
+        <div class="form-group">
+            <label for="modalBindedProxy">Binded Proxy:</label>
+            <input type="text" id="modalBindedProxy">
+        </div>
+        <label for="launchScrcpy">Launch scrcpy?</label>
+        <input type="checkbox" id="launchScrcpy" name="launchScrcpy">
+        <div id="modalControls">
+            <button id="modalLoginButton" class="boton-elegante">Login</button>
+            <button id="modalCheckButton" class="boton-elegante">Check</button>
+            <button id="modalCancelButton" class="boton-elegante">Cancel</button>
+        </div>
+    </div>
+</div>
+
+<!-- Loading Spinner -->
+<div id="loadingSpinner" style="display:none;">
+    <div class="modal-content">
+        <p>Loading...</p>
+    </div>
+</div>
+
+
+<script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+<script src="renderer.js"></script>
+<script>
+
+</script>
+</body>
+</html>
