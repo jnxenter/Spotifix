@@ -1552,14 +1552,14 @@ def start_stop_bot():
 
                 tidal_links = []
                 if config_tidal_links_batch_id:
-                    tidal_batch = Batch.query.filter_by(id=config_tidal_links_batch_id, type='links').first()
+                    tidal_batch = Batch.query.filter_by(id=config_tidal_links_batch_id, type='tidal_links').first()
                     if tidal_batch:
                         tidal_links = tidal_batch.content.splitlines()
                 worker_loaded_tidal_links = tidal_links
 
                 apple_links = []
                 if config_apple_links_batch_id:
-                    apple_batch = Batch.query.filter_by(id=config_apple_links_batch_id, type='links').first()
+                    apple_batch = Batch.query.filter_by(id=config_apple_links_batch_id, type='apple_links').first()
                     if apple_batch:
                         apple_links = apple_batch.content.splitlines()
                 worker_loaded_apple_links = apple_links
@@ -1627,25 +1627,24 @@ def get_worker_threads():
 
 
 def _count_connected_devices():
-    """Count currently connected ADB devices dynamically, deduplicating Panda TCP mirrors."""
+    """Count currently connected ADB devices dynamically, deduplicating Panda TCP mirrors by udid."""
     try:
         result = subprocess.run([adb_path, 'devices', '-l'], capture_output=True, text=True, timeout=5, startupinfo=startupinfo)
-        model_best = {}
+        seen_udids = set()
+        panda_udids = set()
         for line in result.stdout.strip().split('\n')[1:]:
             if '\tdevice' not in line and '   device ' not in line:
                 continue
             parts = line.split()
             udid = parts[0]
-            model_match = next((p.split(':')[1] for p in parts if p.startswith('model:')), None)
-            dedup_key = model_match or udid
-            is_tcp = udid.startswith('127.0.0.1:')
-            if dedup_key not in model_best:
-                model_best[dedup_key] = (udid, is_tcp)
-            elif is_tcp and not model_best[dedup_key][1]:
-                pass
-            elif not is_tcp and model_best[dedup_key][1]:
-                model_best[dedup_key] = (udid, is_tcp)
-        return len(model_best)
+            is_panda_tcp = udid.startswith('127.0.0.1:')
+            if is_panda_tcp:
+                panda_udids.add(udid)
+            else:
+                seen_udids.add(udid)
+        if seen_udids:
+            return len(seen_udids)
+        return len(panda_udids) if panda_udids else worker_devices_connected
     except Exception:
         return worker_devices_connected
 
@@ -6264,19 +6263,11 @@ def main_function(config_data):
         is_tcp = udid.startswith('127.0.0.1:')
         all_devices.append((udid, model_match, device_match, is_tcp))
 
-    model_best = {}
-    for udid, model_match, device_match, is_tcp in all_devices:
-        dedup_key = model_match or device_match
-        if not dedup_key:
-            continue
-        if dedup_key not in model_best:
-            model_best[dedup_key] = (udid, is_tcp)
-        elif is_tcp and not model_best[dedup_key][1]:
-            pass
-        elif not is_tcp and model_best[dedup_key][1]:
-            model_best[dedup_key] = (udid, is_tcp)
-
-    devices = [udid for udid, _ in model_best.values()]
+    usb_devices = [udid for udid, _, _, is_tcp in all_devices if not udid.startswith('127.0.0.1:')]
+    if usb_devices:
+        devices = list(dict.fromkeys(usb_devices))
+    else:
+        devices = list(dict.fromkeys([udid for udid, _, _, _ in all_devices]))
 
     if not devices:
         print("No devices connected.")
