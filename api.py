@@ -6679,6 +6679,31 @@ _timer_start_state = {
 }
 
 
+_TZ_OFFSETS = {
+    "America/Mexico_City": -6, "America/Tijuana": -7, "America/Chihuahua": -6,
+    "America/Bogota": -5, "America/Buenos_Aires": -3, "America/Sao_Paulo": -3,
+    "America/New_York": -4, "America/Chicago": -5, "America/Denver": -6,
+    "America/Los_Angeles": -7, "America/Phoenix": -7, "America/Anchorage": -8,
+    "Pacific/Honolulu": -10, "Europe/Madrid": 2, "Europe/London": 1,
+    "Europe/Berlin": 2, "Europe/Paris": 2, "Asia/Dubai": 4,
+    "Asia/Tokyo": 9, "Asia/Shanghai": 8, "Asia/Singapore": 8,
+    "Australia/Sydney": 10, "UTC": 0,
+}
+
+
+def _get_now_in_tz(tz_name):
+    try:
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        offset_h = _TZ_OFFSETS.get(tz_name, 0)
+        from datetime import timezone, timedelta
+        return datetime.now(timezone(timedelta(hours=offset_h)))
+
+
 def _timer_log(msg, quiet=False):
     ts = datetime.now().strftime("%H:%M:%S")
     _timer_state["log"].append({"time": ts, "msg": msg})
@@ -6841,12 +6866,7 @@ def _timer_check_thread():
     _timer_log("Timer thread started")
     while True:
         try:
-            try:
-                from zoneinfo import ZoneInfo
-            except ImportError:
-                from backports.zoneinfo import ZoneInfo
-            tz = ZoneInfo(_timer_state["timezone"])
-            now = datetime.now(tz)
+            now = _get_now_in_tz(_timer_state["timezone"])
             _timer_log(f"Tick: {now.strftime('%H:%M:%S')} | start_enabled={_timer_start_state['enabled']} start_triggered={_timer_start_state['triggered']} start_time={_timer_start_state['start_hour']:02d}:{_timer_start_state['start_minute']:02d} | stop_enabled={_timer_state['enabled']} stop_triggered={_timer_state['triggered']} stop_time={_timer_state['stop_hour']:02d}:{_timer_state['stop_minute']:02d}", quiet=True)
             if _timer_start_state["enabled"] and not _timer_start_state["triggered"]:
                 if now.hour == _timer_start_state["start_hour"] and now.minute == _timer_start_state["start_minute"]:
