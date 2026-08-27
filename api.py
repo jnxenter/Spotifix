@@ -6792,15 +6792,20 @@ def cancel_start_timer():
 def _start_bot_by_timer():
     global worker_bot_running
     if worker_bot_running:
+        add_log("WARN", "timer", "Bot ya está corriendo, saltando inicio por temporizador")
         return False
     try:
         configs_dir = os.path.join(project_dir, 'Files', 'Configs')
+        if not os.path.exists(configs_dir):
+            add_log("ERROR", "timer", f"Configs dir not found: {configs_dir}")
+            return False
         config_files = [f for f in os.listdir(configs_dir) if f.endswith('.json')]
         if not config_files:
             add_log("ERROR", "timer", "No config files found to start bot")
             return False
         config_name = config_files[0].replace('.json', '')
         config_path = os.path.join(configs_dir, config_files[0])
+        add_log("INFO", "timer", f"Loading config: {config_name}")
         with open(config_path, 'r') as cf:
             config_data = json.load(cf)
         global config_streams_to_do, config_album_likes_rate, config_song_likes_rate
@@ -6838,20 +6843,21 @@ def _start_bot_by_timer():
         config_webhook_interval = config_data.get('webhook_interval', '10')
 
         worker_loaded_spotify_links = []
-        if config_links_batch_id:
-            batch = Batch.query.filter_by(id=config_links_batch_id, type='links').first()
-            if batch:
-                worker_loaded_spotify_links = batch.content.splitlines()
         worker_loaded_tidal_links = []
-        if config_tidal_links_batch_id:
-            batch = Batch.query.filter_by(id=config_tidal_links_batch_id, type='tidal_links').first()
-            if batch:
-                worker_loaded_tidal_links = batch.content.splitlines()
         worker_loaded_apple_links = []
-        if config_apple_links_batch_id:
-            batch = Batch.query.filter_by(id=config_apple_links_batch_id, type='apple_links').first()
-            if batch:
-                worker_loaded_apple_links = batch.content.splitlines()
+        with app.app_context():
+            if config_links_batch_id:
+                batch = Batch.query.filter_by(id=config_links_batch_id, type='links').first()
+                if batch:
+                    worker_loaded_spotify_links = batch.content.splitlines()
+            if config_tidal_links_batch_id:
+                batch = Batch.query.filter_by(id=config_tidal_links_batch_id, type='tidal_links').first()
+                if batch:
+                    worker_loaded_tidal_links = batch.content.splitlines()
+            if config_apple_links_batch_id:
+                batch = Batch.query.filter_by(id=config_apple_links_batch_id, type='apple_links').first()
+                if batch:
+                    worker_loaded_apple_links = batch.content.splitlines()
 
         worker_bot_running = True
         bot_thread = threading.Thread(target=main_function, args=(config_data,))
@@ -6867,23 +6873,31 @@ def _timer_check_thread():
     while True:
         try:
             now = _get_now_in_tz(_timer_state["timezone"])
-            _timer_log(f"Tick: {now.strftime('%H:%M:%S')} | start_enabled={_timer_start_state['enabled']} start_triggered={_timer_start_state['triggered']} start_time={_timer_start_state['start_hour']:02d}:{_timer_start_state['start_minute']:02d} | stop_enabled={_timer_state['enabled']} stop_triggered={_timer_state['triggered']} stop_time={_timer_state['stop_hour']:02d}:{_timer_state['stop_minute']:02d}", quiet=True)
             if _timer_start_state["enabled"] and not _timer_start_state["triggered"]:
                 if now.hour == _timer_start_state["start_hour"] and now.minute == _timer_start_state["start_minute"]:
                     _timer_start_state["triggered"] = True
                     _timer_start_state["enabled"] = False
                     msg = f"TEMPORIZADOR DE INICIO EJECUTADO a las {now.strftime('%H:%M:%S')} — iniciando bot..."
                     _timer_log(msg)
+                    add_log("SUCC", "timer", msg)
                     if not worker_bot_running:
-                        _start_bot_by_timer()
+                        result = _start_bot_by_timer()
+                        if result:
+                            _timer_log("Bot iniciado correctamente por temporizador")
+                        else:
+                            _timer_log("ERROR: No se pudo iniciar el bot por temporizador")
+                    else:
+                        _timer_log("Bot ya está corriendo, no se reinicia")
             if _timer_state["enabled"] and not _timer_state["triggered"]:
                 if now.hour == _timer_state["stop_hour"] and now.minute == _timer_state["stop_minute"]:
                     _timer_state["triggered"] = True
                     _timer_state["enabled"] = False
                     msg = f"TEMPORIZADOR DE PARADA EJECUTADO a las {now.strftime('%H:%M:%S')} — deteniendo bot..."
                     _timer_log(msg)
+                    add_log("SUCC", "timer", msg)
                     try:
                         _stop_bot()
+                        _timer_log("Bot detenido correctamente por temporizador")
                     except Exception as e:
                         _timer_log(f"Error al detener bot: {e}")
         except Exception as e:
