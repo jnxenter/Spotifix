@@ -1623,7 +1623,7 @@ def get_worker_threads():
         }
         for key, value in worker_threads.items()
     }
-    return jsonify(list(worker_threads_serializable.values()))
+    return jsonify({"bot_running": worker_bot_running, "threads": list(worker_threads_serializable.values())})
 
 
 def _count_connected_devices():
