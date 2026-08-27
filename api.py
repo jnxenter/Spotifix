@@ -6679,6 +6679,13 @@ _timer_start_state = {
 }
 
 
+def _timer_log(msg, quiet=False):
+    ts = datetime.now().strftime("%H:%M:%S")
+    _timer_state["log"].append({"time": ts, "msg": msg})
+    if not quiet:
+        add_log("INFO", "timer", msg)
+
+
 @app.route('/get_timer', methods=['GET'])
 @require_token
 def get_timer():
@@ -6831,6 +6838,7 @@ def _start_bot_by_timer():
 
 
 def _timer_check_thread():
+    _timer_log("Timer thread started")
     while True:
         try:
             try:
@@ -6839,13 +6847,13 @@ def _timer_check_thread():
                 from backports.zoneinfo import ZoneInfo
             tz = ZoneInfo(_timer_state["timezone"])
             now = datetime.now(tz)
+            _timer_log(f"Tick: {now.strftime('%H:%M:%S')} | start_enabled={_timer_start_state['enabled']} start_triggered={_timer_start_state['triggered']} start_time={_timer_start_state['start_hour']:02d}:{_timer_start_state['start_minute']:02d} | stop_enabled={_timer_state['enabled']} stop_triggered={_timer_state['triggered']} stop_time={_timer_state['stop_hour']:02d}:{_timer_state['stop_minute']:02d}", quiet=True)
             if _timer_start_state["enabled"] and not _timer_start_state["triggered"]:
                 if now.hour == _timer_start_state["start_hour"] and now.minute == _timer_start_state["start_minute"]:
                     _timer_start_state["triggered"] = True
                     _timer_start_state["enabled"] = False
                     msg = f"TEMPORIZADOR DE INICIO EJECUTADO a las {now.strftime('%H:%M:%S')} — iniciando bot..."
-                    _timer_state["log"].append({"time": now.strftime("%H:%M:%S"), "msg": msg})
-                    add_log("SUCC", "timer", msg)
+                    _timer_log(msg)
                     if not worker_bot_running:
                         _start_bot_by_timer()
             if _timer_state["enabled"] and not _timer_state["triggered"]:
@@ -6853,14 +6861,13 @@ def _timer_check_thread():
                     _timer_state["triggered"] = True
                     _timer_state["enabled"] = False
                     msg = f"TEMPORIZADOR DE PARADA EJECUTADO a las {now.strftime('%H:%M:%S')} — deteniendo bot..."
-                    _timer_state["log"].append({"time": now.strftime("%H:%M:%S"), "msg": msg})
-                    add_log("SUCC", "timer", msg)
+                    _timer_log(msg)
                     try:
                         _stop_bot()
                     except Exception as e:
-                        add_log("ERROR", "timer", f"Failed to stop bot: {e}")
-        except Exception:
-            pass
+                        _timer_log(f"Error al detener bot: {e}")
+        except Exception as e:
+            _timer_log(f"Timer thread error: {e}")
         time.sleep(10)
 
 
