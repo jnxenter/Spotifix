@@ -1341,34 +1341,36 @@ document.addEventListener('DOMContentLoaded', () => {
                     logDiv.scrollTop = 0;
                 }
 
+                var _timerFirstLoad = true;
                 function loadTimerState() {
                     fetch('http://localhost:8999/get_timer', { headers: { 'Authorization': 'Bearer ' + authToken } })
                     .then(r => r.json())
                     .then(d => {
-                        if (tzSelect) tzSelect.value = d.timezone || 'America/Mexico_City';
-                        if (d.stop_hour !== undefined) {
-                            var t12 = to12(d.stop_hour);
-                            if (stopHourSel) stopHourSel.value = t12.h;
-                            if (stopMinSel) stopMinSel.value = String(d.stop_minute || 0).padStart(2, '0');
-                            if (stopAmpmSel) stopAmpmSel.value = t12.ampm;
+                        if (_timerFirstLoad) {
+                            if (tzSelect) tzSelect.value = d.timezone || 'America/Mexico_City';
+                            if (d.stop_hour !== undefined) {
+                                var t12 = to12(d.stop_hour);
+                                if (stopHourSel) stopHourSel.value = t12.h;
+                                if (stopMinSel) stopMinSel.value = String(d.stop_minute || 0).padStart(2, '0');
+                                if (stopAmpmSel) stopAmpmSel.value = t12.ampm;
+                            }
+                            if (d.start_hour !== undefined) {
+                                var s12 = to12(d.start_hour);
+                                if (startHourSel) startHourSel.value = s12.h;
+                                if (startMinSel) startMinSel.value = String(d.start_minute || 0).padStart(2, '0');
+                                if (startAmpmSel) startAmpmSel.value = s12.ampm;
+                            }
+                            _timerFirstLoad = false;
                         }
-                        if (enabledCheck) enabledCheck.checked = d.enabled;
                         if (d.enabled) {
-                            statusDiv.innerHTML = '<span style="color:#5dade2;">Temporizador activo — se detiene a las ' + stopHourSel.value + ':' + stopMinSel.value + ' ' + stopAmpmSel.value + '</span>';
+                            statusDiv.innerHTML = '<span style="color:#5dade2;">Temporizador activo — se detiene a las ' + d.stop_hour + ':' + String(d.stop_minute || 0).padStart(2, '0') + '</span>';
                         } else if (d.triggered) {
                             statusDiv.innerHTML = '<span style="color:#e74c3c;">Temporizador ejecutado — bot detenido.</span>';
                         } else {
                             statusDiv.innerHTML = '<span style="color:#888;">Sin temporizador de parada activo.</span>';
                         }
-                        if (d.start_hour !== undefined) {
-                            var s12 = to12(d.start_hour);
-                            if (startHourSel) startHourSel.value = s12.h;
-                            if (startMinSel) startMinSel.value = String(d.start_minute || 0).padStart(2, '0');
-                            if (startAmpmSel) startAmpmSel.value = s12.ampm;
-                        }
-                        if (startEnabledCheck) startEnabledCheck.checked = d.start_enabled;
                         if (d.start_enabled) {
-                            startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador activo — inicia a las ' + startHourSel.value + ':' + startMinSel.value + ' ' + startAmpmSel.value + '</span>';
+                            startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador activo — inicia a las ' + d.start_hour + ':' + String(d.start_minute || 0).padStart(2, '0') + '</span>';
                         } else if (d.start_triggered) {
                             startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador ejecutado — bot iniciado.</span>';
                         } else {
