@@ -1297,19 +1297,37 @@ document.addEventListener('DOMContentLoaded', () => {
             // ---- Timer ----
             (function() {
                 const tzSelect = document.getElementById('timerTimezone');
-                const stopTimeInput = document.getElementById('timerStopTime');
+                const stopHourSel = document.getElementById('timerStopHour');
+                const stopMinSel = document.getElementById('timerStopMin');
+                const stopAmpmSel = document.getElementById('timerStopAmpm');
                 const enabledCheck = document.getElementById('timerEnabled');
                 const saveBtn = document.getElementById('timerSaveBtn');
                 const cancelBtn = document.getElementById('timerCancelBtn');
                 const statusDiv = document.getElementById('timerStatus');
                 const logDiv = document.getElementById('timerLog');
                 const clockSpan = document.getElementById('timerCurrentClock');
-                const startTimeInput = document.getElementById('timerStartTime');
+                const startHourSel = document.getElementById('timerStartHour');
+                const startMinSel = document.getElementById('timerStartMin');
+                const startAmpmSel = document.getElementById('timerStartAmpm');
                 const startEnabledCheck = document.getElementById('timerStartEnabled');
                 const startSaveBtn = document.getElementById('timerStartSaveBtn');
                 const startCancelBtn = document.getElementById('timerStartCancelBtn');
                 const startStatusDiv = document.getElementById('timerStartStatus');
                 if (!saveBtn && !startSaveBtn) return;
+
+                function to12(h24) {
+                    h24 = parseInt(h24, 10);
+                    if (h24 === 0) return { h: '12', ampm: 'AM' };
+                    if (h24 < 12) return { h: String(h24), ampm: 'AM' };
+                    if (h24 === 12) return { h: '12', ampm: 'PM' };
+                    return { h: String(h24 - 12), ampm: 'PM' };
+                }
+
+                function to24(h12, ampm) {
+                    h12 = parseInt(h12, 10);
+                    if (ampm === 'AM') return h12 === 12 ? 0 : h12;
+                    return h12 === 12 ? 12 : h12 + 12;
+                }
 
                 function renderTimerLog(entries) {
                     if (!logDiv) return;
@@ -1328,19 +1346,29 @@ document.addEventListener('DOMContentLoaded', () => {
                     .then(r => r.json())
                     .then(d => {
                         if (tzSelect) tzSelect.value = d.timezone || 'America/Mexico_City';
-                        if (stopTimeInput) stopTimeInput.value = String(d.stop_hour || 22).padStart(2, '0') + ':' + String(d.stop_minute || 0).padStart(2, '0');
+                        if (d.stop_hour !== undefined) {
+                            var t12 = to12(d.stop_hour);
+                            if (stopHourSel) stopHourSel.value = t12.h;
+                            if (stopMinSel) stopMinSel.value = String(d.stop_minute || 0).padStart(2, '0');
+                            if (stopAmpmSel) stopAmpmSel.value = t12.ampm;
+                        }
                         if (enabledCheck) enabledCheck.checked = d.enabled;
                         if (d.enabled) {
-                            statusDiv.innerHTML = '<span style="color:#5dade2;">Temporizador activo — se detiene a las ' + stopTimeInput.value + '</span>';
+                            statusDiv.innerHTML = '<span style="color:#5dade2;">Temporizador activo — se detiene a las ' + stopHourSel.value + ':' + stopMinSel.value + ' ' + stopAmpmSel.value + '</span>';
                         } else if (d.triggered) {
                             statusDiv.innerHTML = '<span style="color:#e74c3c;">Temporizador ejecutado — bot detenido.</span>';
                         } else {
                             statusDiv.innerHTML = '<span style="color:#888;">Sin temporizador de parada activo.</span>';
                         }
-                        if (startTimeInput) startTimeInput.value = String(d.start_hour || 8).padStart(2, '0') + ':' + String(d.start_minute || 0).padStart(2, '0');
+                        if (d.start_hour !== undefined) {
+                            var s12 = to12(d.start_hour);
+                            if (startHourSel) startHourSel.value = s12.h;
+                            if (startMinSel) startMinSel.value = String(d.start_minute || 0).padStart(2, '0');
+                            if (startAmpmSel) startAmpmSel.value = s12.ampm;
+                        }
                         if (startEnabledCheck) startEnabledCheck.checked = d.start_enabled;
                         if (d.start_enabled) {
-                            startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador activo — inicia a las ' + startTimeInput.value + '</span>';
+                            startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador activo — inicia a las ' + startHourSel.value + ':' + startMinSel.value + ' ' + startAmpmSel.value + '</span>';
                         } else if (d.start_triggered) {
                             startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador ejecutado — bot iniciado.</span>';
                         } else {
@@ -1351,10 +1379,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 if (saveBtn) saveBtn.addEventListener('click', () => {
+                    var h24 = to24(stopHourSel.value, stopAmpmSel.value);
+                    var mm = stopMinSel.value;
                     fetch('http://localhost:8999/set_timer', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-                        body: JSON.stringify({ enabled: enabledCheck.checked, timezone: tzSelect.value, stop_time: stopTimeInput.value })
+                        body: JSON.stringify({ enabled: enabledCheck.checked, timezone: tzSelect.value, stop_time: String(h24).padStart(2, '0') + ':' + mm })
                     })
                     .then(r => r.json())
                     .then(d => { if (d.success) loadTimerState(); else statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
@@ -1367,10 +1397,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
 
                 if (startSaveBtn) startSaveBtn.addEventListener('click', () => {
+                    var h24 = to24(startHourSel.value, startAmpmSel.value);
+                    var mm = startMinSel.value;
                     fetch('http://localhost:8999/set_start_timer', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-                        body: JSON.stringify({ enabled: startEnabledCheck.checked, start_time: startTimeInput.value })
+                        body: JSON.stringify({ enabled: startEnabledCheck.checked, start_time: String(h24).padStart(2, '0') + ':' + mm })
                     })
                     .then(r => r.json())
                     .then(d => { if (d.success) loadTimerState(); else startStatusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
