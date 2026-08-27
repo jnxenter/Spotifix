@@ -6798,10 +6798,12 @@ def _start_bot_by_timer():
         configs_dir = os.path.join(project_dir, 'Files', 'Configs')
         if not os.path.exists(configs_dir):
             add_log("ERROR", "timer", f"Configs dir not found: {configs_dir}")
+            _timer_log(f"ERROR: Configs dir not found: {configs_dir}")
             return False
         config_files = [f for f in os.listdir(configs_dir) if f.endswith('.json')]
         if not config_files:
             add_log("ERROR", "timer", "No config files found to start bot")
+            _timer_log("ERROR: No config files found")
             return False
         config_name = config_files[0].replace('.json', '')
         config_path = os.path.join(configs_dir, config_files[0])
@@ -6816,8 +6818,9 @@ def _start_bot_by_timer():
         global config_search_links_perc, config_streaming_mode_only, config_use_clonned_apks
         global config_selected_apps, config_spotify_playtime, config_tidal_playtime, config_apple_playtime
         global worker_loaded_spotify_links, worker_loaded_tidal_links, worker_loaded_apple_links
+        global worker_loaded_link, worker_loaded_accounts, worker_loaded_proxies
 
-        config_streams_to_do = int(config_data.get('streams_to_do', 0))
+        config_streams_to_do = int(config_data.get('streams_to_do'))
         if config_streams_to_do == 0:
             config_streams_to_do = 99999999
         config_album_likes_rate = int(config_data.get('album_likes_rate', 0))
@@ -6830,36 +6833,58 @@ def _start_bot_by_timer():
         config_apple_playtime = config_data.get('apple_playtime', '') or ''
         config_streaming_mode_only = config_data.get('streaming_mode_only')
         config_use_clonned_apks = config_data.get('use_clonned_apks')
-        config_selected_apps = config_data.get('selected_apps', ['Spotify'])
-        config_session_time = int(config_data.get('session_time', 10))
+
+        raw_apps = config_data.get('selected_apps', ['spotify'])
+        if isinstance(raw_apps, str):
+            raw_apps = [a.strip() for a in raw_apps.split(',') if a.strip()]
+        config_selected_apps = [a for a in raw_apps if a in SUPPORTED_APPS]
+        if not config_selected_apps:
+            config_selected_apps = ['spotify']
+
+        config_session_time = config_data.get('session_time') or '8-8'
         config_links_batch_id = config_data.get('links_batch_id')
         config_tidal_links_batch_id = config_data.get('tidal_links_batch_id')
         config_apple_links_batch_id = config_data.get('apple_links_batch_id')
-        config_shuffle_perc = int(config_data.get('shuffle_perc', 0))
-        config_search_links_perc = int(config_data.get('search_links_perc', 0))
-        config_use_webhook = config_data.get('use_webhook', 'False')
-        config_webhook_name = config_data.get('webhook_name', '')
-        config_webhook_url = config_data.get('webhook_url', '')
-        config_webhook_interval = config_data.get('webhook_interval', '10')
+        config_shuffle_perc = int(config_data.get('shuffle_perc'))
+        config_search_links_perc = int(config_data.get('search_links_perc'))
 
-        worker_loaded_spotify_links = []
-        worker_loaded_tidal_links = []
-        worker_loaded_apple_links = []
+        webhook_config = config_data.get('webhook', {})
+        config_use_webhook = str(webhook_config.get('use'))
+        config_webhook_name = webhook_config.get('name')
+        config_webhook_url = webhook_config.get('url')
+        config_webhook_interval = webhook_config.get('interval')
+
         with app.app_context():
-            if config_links_batch_id:
-                batch = Batch.query.filter_by(id=config_links_batch_id, type='links').first()
-                if batch:
-                    worker_loaded_spotify_links = batch.content.splitlines()
+            batch = Batch.query.filter_by(id=config_links_batch_id, type='links').first()
+            if not batch:
+                _timer_log("ERROR: Link batch not found")
+                return False
+            links = batch.content.splitlines()
+            worker_loaded_link = links
+            worker_loaded_spotify_links = links
+
+            tidal_links = []
             if config_tidal_links_batch_id:
-                batch = Batch.query.filter_by(id=config_tidal_links_batch_id, type='tidal_links').first()
-                if batch:
-                    worker_loaded_tidal_links = batch.content.splitlines()
+                tidal_batch = Batch.query.filter_by(id=config_tidal_links_batch_id, type='tidal_links').first()
+                if tidal_batch:
+                    tidal_links = tidal_batch.content.splitlines()
+            worker_loaded_tidal_links = tidal_links
+
+            apple_links = []
             if config_apple_links_batch_id:
-                batch = Batch.query.filter_by(id=config_apple_links_batch_id, type='apple_links').first()
-                if batch:
-                    worker_loaded_apple_links = batch.content.splitlines()
+                apple_batch = Batch.query.filter_by(id=config_apple_links_batch_id, type='apple_links').first()
+                if apple_batch:
+                    apple_links = apple_batch.content.splitlines()
+            worker_loaded_apple_links = apple_links
+
+        if config_use_webhook == 'True':
+            webhook_thread = threading.Thread(target=send_discord_webhook,
+                                              args=(int(config_webhook_interval), config_webhook_url))
+            webhook_thread.daemon = True
+            webhook_thread.start()
 
         worker_bot_running = True
+        _timer_log(f"Bot starting with config {config_name}, apps: {config_selected_apps}")
         bot_thread = threading.Thread(target=main_function, args=(config_data,))
         bot_thread.start()
         return True
