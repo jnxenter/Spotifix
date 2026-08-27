@@ -6864,7 +6864,11 @@ def _start_bot_by_timer():
         bot_thread.start()
         return True
     except Exception as e:
+        import traceback
+        err = traceback.format_exc()
+        _timer_log(f"ERROR start_bot_by_timer: {e}\n{err}")
         add_log("ERROR", "timer", f"Failed to start bot: {e}")
+        worker_bot_running = False
         return False
 
 
@@ -6880,6 +6884,7 @@ def _timer_check_thread():
                     msg = f"TEMPORIZADOR DE INICIO EJECUTADO a las {now.strftime('%H:%M:%S')} — iniciando bot..."
                     _timer_log(msg)
                     add_log("SUCC", "timer", msg)
+                    _timer_log(f"DEBUG: worker_bot_running={worker_bot_running}")
                     if not worker_bot_running:
                         result = _start_bot_by_timer()
                         if result:
