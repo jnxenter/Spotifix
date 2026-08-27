@@ -1434,6 +1434,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const startStopButton = document.getElementById('startStopButton');
             if (startStopButton) {
                 startStopButton.addEventListener('click', () => startBot());
+                setInterval(fetchWorkerThreads, 5000);
             }
 
             const saveConfigButton = document.getElementById('saveConfigButton');
