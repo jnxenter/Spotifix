@@ -1384,7 +1384,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     fetch('http://localhost:8999/set_timer', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-                        body: JSON.stringify({ enabled: enabledCheck.checked, timezone: tzSelect.value, stop_time: String(h24).padStart(2, '0') + ':' + mm })
+                        body: JSON.stringify({ enabled: true, timezone: tzSelect.value, stop_time: String(h24).padStart(2, '0') + ':' + mm })
                     })
                     .then(r => r.json())
                     .then(d => { if (d.success) loadTimerState(); else statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
@@ -1402,7 +1402,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     fetch('http://localhost:8999/set_start_timer', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-                        body: JSON.stringify({ enabled: startEnabledCheck.checked, start_time: String(h24).padStart(2, '0') + ':' + mm })
+                        body: JSON.stringify({ enabled: true, start_time: String(h24).padStart(2, '0') + ':' + mm })
                     })
                     .then(r => r.json())
                     .then(d => { if (d.success) loadTimerState(); else startStatusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
