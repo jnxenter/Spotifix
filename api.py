@@ -5780,13 +5780,13 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
         app_last_forcestop_time[app_key] = 0
 
     while (time.time() - session_start) < session_time_seconds:
-        if stop_flags.get(udid):
+        if stop_flags.get(udid) or stop_flags.get(f"{udid}_multiapp"):
             break
 
         now = time.time()
 
         for app_key in selected_apps_keys:
-            if stop_flags.get(udid):
+            if stop_flags.get(udid) or stop_flags.get(f"{udid}_multiapp"):
                 break
             if stop_flags.get(f"{udid}_{app_key}"):
                 continue
@@ -6081,7 +6081,7 @@ def single_clone_automation_flow(d, udid, spotify_pkgs, session_time_seconds, se
             disable_autoplay(d, udid, pkg)
 
         pkg_start_time = time.time()
-        while (time.time() - pkg_start_time) < session_time_seconds and not stop_flags.get(udid):
+        while (time.time() - pkg_start_time) < session_time_seconds and not stop_flags.get(udid) and not stop_flags.get(f"{udid}_multiapp"):
             ppa = 9999999
             update_thread_status(udid, f'[{display_name}] Running', None, False, False, False, False, False, None)
             ensure_screen_on(d)
@@ -6114,7 +6114,7 @@ def single_clone_automation_flow(d, udid, spotify_pkgs, session_time_seconds, se
                         else:
                             add_log("ERR.", udid, msg)
 
-            while not stop_flags.get(udid):
+            while not stop_flags.get(udid) and not stop_flags.get(f"{udid}_multiapp"):
                 freeze_rotation_port(d)
                 if is_spotify:
                     if restart_spotify_if_crashed(d, True, pkg) is True:
