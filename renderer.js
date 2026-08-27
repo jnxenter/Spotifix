@@ -1308,7 +1308,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 function renderTimerLog(entries) {
                     if (!entries || !entries.length) {
-                        logDiv.innerHTML = '<p style="color: #666;">No timer events yet.</p>';
+                        logDiv.innerHTML = '<p style="color: #666;">Sin eventos de temporizador.</p>';
                         return;
                     }
                     logDiv.innerHTML = entries.map(e =>
@@ -1325,11 +1325,11 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (stopTimeInput) stopTimeInput.value = String(d.stop_hour || 22).padStart(2, '0') + ':' + String(d.stop_minute || 0).padStart(2, '0');
                         if (enabledCheck) enabledCheck.checked = d.enabled;
                         if (d.enabled) {
-                            statusDiv.innerHTML = '<span style="color:#5dade2;">Timer active — stops at ' + stopTimeInput.value + ' (' + tzSelect.value + ')</span>';
+                            statusDiv.innerHTML = '<span style="color:#5dade2;">Temporizador activo — se detiene a las ' + stopTimeInput.value + ' (' + tzSelect.value + ')</span>';
                         } else if (d.triggered) {
-                            statusDiv.innerHTML = '<span style="color:#e74c3c;">Timer triggered — bot was stopped.</span>';
+                            statusDiv.innerHTML = '<span style="color:#e74c3c;">Temporizador ejecutado — bot detenido.</span>';
                         } else {
-                            statusDiv.innerHTML = '<span style="color:#888;">No timer active.</span>';
+                            statusDiv.innerHTML = '<span style="color:#888;">Sin temporizador activo.</span>';
                         }
                         renderTimerLog(d.log);
                     }).catch(() => {});
