@@ -1304,9 +1304,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 const statusDiv = document.getElementById('timerStatus');
                 const logDiv = document.getElementById('timerLog');
                 const clockSpan = document.getElementById('timerCurrentClock');
-                if (!saveBtn) return;
+                const startTimeInput = document.getElementById('timerStartTime');
+                const startEnabledCheck = document.getElementById('timerStartEnabled');
+                const startSaveBtn = document.getElementById('timerStartSaveBtn');
+                const startCancelBtn = document.getElementById('timerStartCancelBtn');
+                const startStatusDiv = document.getElementById('timerStartStatus');
+                if (!saveBtn && !startSaveBtn) return;
 
                 function renderTimerLog(entries) {
+                    if (!logDiv) return;
                     if (!entries || !entries.length) {
                         logDiv.innerHTML = '<p style="color: #666;">Sin eventos de temporizador.</p>';
                         return;
@@ -1325,47 +1331,55 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (stopTimeInput) stopTimeInput.value = String(d.stop_hour || 22).padStart(2, '0') + ':' + String(d.stop_minute || 0).padStart(2, '0');
                         if (enabledCheck) enabledCheck.checked = d.enabled;
                         if (d.enabled) {
-                            statusDiv.innerHTML = '<span style="color:#5dade2;">Temporizador activo — se detiene a las ' + stopTimeInput.value + ' (' + tzSelect.value + ')</span>';
+                            statusDiv.innerHTML = '<span style="color:#5dade2;">Temporizador activo — se detiene a las ' + stopTimeInput.value + '</span>';
                         } else if (d.triggered) {
                             statusDiv.innerHTML = '<span style="color:#e74c3c;">Temporizador ejecutado — bot detenido.</span>';
                         } else {
-                            statusDiv.innerHTML = '<span style="color:#888;">Sin temporizador activo.</span>';
+                            statusDiv.innerHTML = '<span style="color:#888;">Sin temporizador de parada activo.</span>';
+                        }
+                        if (startTimeInput) startTimeInput.value = String(d.start_hour || 8).padStart(2, '0') + ':' + String(d.start_minute || 0).padStart(2, '0');
+                        if (startEnabledCheck) startEnabledCheck.checked = d.start_enabled;
+                        if (d.start_enabled) {
+                            startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador activo — inicia a las ' + startTimeInput.value + '</span>';
+                        } else if (d.start_triggered) {
+                            startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador ejecutado — bot iniciado.</span>';
+                        } else {
+                            startStatusDiv.innerHTML = '<span style="color:#888;">Sin temporizador de inicio activo.</span>';
                         }
                         renderTimerLog(d.log);
                     }).catch(() => {});
                 }
 
-                saveBtn.addEventListener('click', () => {
-                    const body = {
-                        enabled: enabledCheck.checked,
-                        timezone: tzSelect.value,
-                        stop_time: stopTimeInput.value
-                    };
+                if (saveBtn) saveBtn.addEventListener('click', () => {
                     fetch('http://localhost:8999/set_timer', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-                        body: JSON.stringify(body)
+                        body: JSON.stringify({ enabled: enabledCheck.checked, timezone: tzSelect.value, stop_time: stopTimeInput.value })
                     })
                     .then(r => r.json())
-                    .then(d => {
-                        if (d.success) {
-                            loadTimerState();
-                        } else {
-                            statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Unknown') + '</span>';
-                        }
-                    }).catch(err => {
-                        statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + err.message + '</span>';
-                    });
+                    .then(d => { if (d.success) loadTimerState(); else statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
+                    .catch(err => { statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + err.message + '</span>'; });
                 });
 
-                cancelBtn.addEventListener('click', () => {
-                    fetch('http://localhost:8999/cancel_timer', {
+                if (cancelBtn) cancelBtn.addEventListener('click', () => {
+                    fetch('http://localhost:8999/cancel_timer', { method: 'POST', headers: { 'Authorization': 'Bearer ' + authToken } })
+                    .then(r => r.json()).then(() => loadTimerState()).catch(() => {});
+                });
+
+                if (startSaveBtn) startSaveBtn.addEventListener('click', () => {
+                    fetch('http://localhost:8999/set_start_timer', {
                         method: 'POST',
-                        headers: { 'Authorization': 'Bearer ' + authToken }
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                        body: JSON.stringify({ enabled: startEnabledCheck.checked, start_time: startTimeInput.value })
                     })
                     .then(r => r.json())
-                    .then(() => loadTimerState())
-                    .catch(() => {});
+                    .then(d => { if (d.success) loadTimerState(); else startStatusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
+                    .catch(err => { startStatusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + err.message + '</span>'; });
+                });
+
+                if (startCancelBtn) startCancelBtn.addEventListener('click', () => {
+                    fetch('http://localhost:8999/cancel_start_timer', { method: 'POST', headers: { 'Authorization': 'Bearer ' + authToken } })
+                    .then(r => r.json()).then(() => loadTimerState()).catch(() => {});
                 });
 
                 setInterval(() => {
