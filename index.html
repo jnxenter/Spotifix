@@ -481,6 +481,42 @@
             background-color: #c82333;
         }
 
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #555;
+            border-radius: 24px;
+            transition: 0.3s;
+        }
+        .toggle-slider:before {
+            content: "";
+            position: absolute;
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: #fff;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: #2ecc71;
+        }
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+        }
         .boton-elegante {
             padding: 8px 15px;
             border: 2px solid #2c2c2c;
@@ -1539,14 +1575,12 @@
                     <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8" selected>8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
                 </select>
                 <span style="color:#888;">:</span>
-                <select id="timerStartMin" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
-                    <option value="00" selected>00</option><option value="15">15</option><option value="30">30</option><option value="45">45</option>
-                </select>
+                <input type="number" id="timerStartMin" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                 <select id="timerStartAmpm" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                     <option value="AM">AM</option><option value="PM">PM</option>
                 </select>
                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #ccc;">
-                    <input type="checkbox" id="timerStartEnabled" style="width: 18px; height: 18px; accent-color: #2ecc71;">
+                    <label class="toggle-switch"><input type="checkbox" id="timerStartEnabled"><span class="toggle-slider"></span></label>
                     Activar
                 </label>
             </div>
@@ -1565,14 +1599,12 @@
                     <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
                 </select>
                 <span style="color:#888;">:</span>
-                <select id="timerStopMin" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
-                    <option value="00" selected>00</option><option value="15">15</option><option value="30">30</option><option value="45">45</option>
-                </select>
+                <input type="number" id="timerStopMin" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                 <select id="timerStopAmpm" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                     <option value="AM">AM</option><option value="PM" selected>PM</option>
                 </select>
                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #ccc;">
-                    <input type="checkbox" id="timerEnabled" style="width: 18px; height: 18px; accent-color: #5dade2;">
+                    <label class="toggle-switch"><input type="checkbox" id="timerEnabled"><span class="toggle-slider"></span></label>
                     Activar
                 </label>
             </div>
