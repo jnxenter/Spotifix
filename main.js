@@ -161,6 +161,17 @@ if (!gotTheLock) {
         mainWindow.loadFile('index.html').catch(err => {
             console.error('Failed to load index.html:', err);
         });
+
+        mainWindow.webContents.on('context-menu', (event, params) => {
+            const menu = Menu.buildFromTemplate([
+                { label: 'Cortar', role: 'cut', enabled: params.selectionText.length > 0 },
+                { label: 'Copiar', role: 'copy', enabled: params.selectionText.length > 0 },
+                { label: 'Pegar', role: 'paste', enabled: params.isEditable },
+                { type: 'separator' },
+                { label: 'Seleccionar todo', role: 'selectAll', enabled: params.isEditable }
+            ]);
+            menu.popup();
+        });
         mainWindow.webContents.on('did-finish-load', () => {
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('token-received', token);
