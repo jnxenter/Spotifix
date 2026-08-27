@@ -6662,6 +6662,106 @@ def backend_ready():
         return jsonify({"ready": True, "message": "Ready to launch!"})
 
 
+_timer_state = {
+    "enabled": False,
+    "timezone": "America/Mexico_City",
+    "stop_hour": 22,
+    "stop_minute": 0,
+    "triggered": False,
+    "log": []
+}
+
+
+@app.route('/get_timer', methods=['GET'])
+@require_token
+def get_timer():
+    return jsonify({
+        "enabled": _timer_state["enabled"],
+        "timezone": _timer_state["timezone"],
+        "stop_hour": _timer_state["stop_hour"],
+        "stop_minute": _timer_state["stop_minute"],
+        "triggered": _timer_state["triggered"],
+        "log": _timer_state["log"][-20:]
+    })
+
+
+@app.route('/set_timer', methods=['POST'])
+@require_token
+def set_timer():
+    data = request.json or {}
+    _timer_state["enabled"] = data.get("enabled", False)
+    _timer_state["timezone"] = data.get("timezone", "America/Mexico_City")
+    stop_time = data.get("stop_time", "22:00")
+    parts = stop_time.split(":")
+    try:
+        _timer_state["stop_hour"] = int(parts[0])
+        _timer_state["stop_minute"] = int(parts[1])
+    except (IndexError, ValueError):
+        return jsonify({"success": False, "error": "Invalid time format"}), 400
+    _timer_state["triggered"] = False
+    msg = f"Timer {'activated' if _timer_state['enabled'] else 'deactivated'}: {_timer_state['stop_hour']:02d}:{_timer_state['stop_minute']:02d} ({_timer_state['timezone']})"
+    _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
+    add_log("INFO", "timer", msg)
+    return jsonify({"success": True, "state": _timer_state})
+
+
+@app.route('/cancel_timer', methods=['POST'])
+@require_token
+def cancel_timer():
+    _timer_state["enabled"] = False
+    _timer_state["triggered"] = False
+    msg = "Timer cancelled"
+    _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
+    add_log("INFO", "timer", msg)
+    return jsonify({"success": True})
+
+
+def _timer_check_thread():
+    import importlib
+    while True:
+        try:
+            if _timer_state["enabled"] and not _timer_state["triggered"]:
+                try:
+                    from zoneinfo import ZoneInfo
+                except ImportError:
+                    from backports.zoneinfo import ZoneInfo
+                tz = ZoneInfo(_timer_state["timezone"])
+                now = datetime.now(tz)
+                if now.hour == _timer_state["stop_hour"] and now.minute == _timer_state["stop_minute"]:
+                    _timer_state["triggered"] = True
+                    _timer_state["enabled"] = False
+                    msg = f"TIMER TRIGGERED at {now.strftime('%H:%M:%S')} ({_timer_state['timezone']}) — stopping bot..."
+                    _timer_state["log"].append({"time": now.strftime("%H:%M:%S"), "msg": msg})
+                    add_log("SUCC", "timer", msg)
+                    try:
+                        _stop_bot()
+                    except Exception as e:
+                        add_log("ERROR", "timer", f"Failed to stop bot: {e}")
+        except Exception:
+            pass
+        time.sleep(10)
+
+
+_timer_thread = threading.Thread(target=_timer_check_thread, daemon=True)
+_timer_thread.start()
+
+
+def _stop_bot():
+    global worker_bot_running
+    try:
+        for thread_number in list(worker_threads.keys()):
+            stop_flags[thread_number] = True
+        for thread_info in worker_threads.values():
+            thread = thread_info.get("thread")
+            if thread and thread.is_alive():
+                thread.join(timeout=3)
+        worker_threads.clear()
+        worker_bot_running = False
+    except Exception as e:
+        worker_bot_running = False
+        print(f"Error stopping bot: {e}")
+
+
 @app.route('/get_version', methods=['GET'])
 @require_token
 def get_version():
