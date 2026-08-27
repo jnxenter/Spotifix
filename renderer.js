@@ -1418,10 +1418,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     const tz = tzSelect ? tzSelect.value : 'America/Mexico_City';
                     try {
                         const now = new Date();
-                        const str = now.toLocaleTimeString('en-GB', { timeZone: tz, hour12: false });
+                        const str = now.toLocaleTimeString('en-US', { timeZone: tz, hour12: true });
                         if (clockSpan) clockSpan.textContent = str;
                     } catch (e) {
-                        if (clockSpan) clockSpan.textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+                        if (clockSpan) clockSpan.textContent = new Date().toLocaleTimeString('en-US', { hour12: true });
                     }
                 }, 1000);
 
