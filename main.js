@@ -131,7 +131,17 @@ if (!gotTheLock) {
             splashScreen.close(); // Close splash screen if main window is to be shown
         }
 
-        Menu.setApplicationMenu(null);
+        Menu.setApplicationMenu(Menu.buildFromTemplate([
+            { label: 'Edit', submenu: [
+                { role: 'undo' },
+                { role: 'redo' },
+                { type: 'separator' },
+                { role: 'cut' },
+                { role: 'copy' },
+                { role: 'paste' },
+                { role: 'selectAll' }
+            ]}
+        ]));
         mainWindow = new BrowserWindow({
             minWidth: 1380,
             minHeight: 770,
