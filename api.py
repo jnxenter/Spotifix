@@ -6869,9 +6869,7 @@ def _timer_check_thread():
             now = _get_now_in_tz(_timer_state["timezone"])
             _timer_log(f"Tick: {now.strftime('%H:%M:%S')} | start_enabled={_timer_start_state['enabled']} start_triggered={_timer_start_state['triggered']} start_time={_timer_start_state['start_hour']:02d}:{_timer_start_state['start_minute']:02d} | stop_enabled={_timer_state['enabled']} stop_triggered={_timer_state['triggered']} stop_time={_timer_state['stop_hour']:02d}:{_timer_state['stop_minute']:02d}", quiet=True)
             if _timer_start_state["enabled"] and not _timer_start_state["triggered"]:
-                target = _timer_start_state["start_hour"] * 60 + _timer_start_state["start_minute"]
-                current = now.hour * 60 + now.minute
-                if current >= target:
+                if now.hour == _timer_start_state["start_hour"] and now.minute == _timer_start_state["start_minute"]:
                     _timer_start_state["triggered"] = True
                     _timer_start_state["enabled"] = False
                     msg = f"TEMPORIZADOR DE INICIO EJECUTADO a las {now.strftime('%H:%M:%S')} — iniciando bot..."
@@ -6879,9 +6877,7 @@ def _timer_check_thread():
                     if not worker_bot_running:
                         _start_bot_by_timer()
             if _timer_state["enabled"] and not _timer_state["triggered"]:
-                target = _timer_state["stop_hour"] * 60 + _timer_state["stop_minute"]
-                current = now.hour * 60 + now.minute
-                if current >= target:
+                if now.hour == _timer_state["stop_hour"] and now.minute == _timer_state["stop_minute"]:
                     _timer_state["triggered"] = True
                     _timer_state["enabled"] = False
                     msg = f"TEMPORIZADOR DE PARADA EJECUTADO a las {now.strftime('%H:%M:%S')} — deteniendo bot..."
@@ -6892,7 +6888,7 @@ def _timer_check_thread():
                         _timer_log(f"Error al detener bot: {e}")
         except Exception as e:
             _timer_log(f"Timer thread error: {e}")
-        time.sleep(10)
+        time.sleep(5)
 
 
 _timer_thread = threading.Thread(target=_timer_check_thread, daemon=True)
