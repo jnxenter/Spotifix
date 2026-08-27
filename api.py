@@ -6671,6 +6671,13 @@ _timer_state = {
     "log": []
 }
 
+_timer_start_state = {
+    "enabled": False,
+    "start_hour": 8,
+    "start_minute": 0,
+    "triggered": False
+}
+
 
 @app.route('/get_timer', methods=['GET'])
 @require_token
@@ -6681,6 +6688,10 @@ def get_timer():
         "stop_hour": _timer_state["stop_hour"],
         "stop_minute": _timer_state["stop_minute"],
         "triggered": _timer_state["triggered"],
+        "start_enabled": _timer_start_state["enabled"],
+        "start_hour": _timer_start_state["start_hour"],
+        "start_minute": _timer_start_state["start_minute"],
+        "start_triggered": _timer_start_state["triggered"],
         "log": _timer_state["log"][-20:]
     })
 
@@ -6699,10 +6710,29 @@ def set_timer():
     except (IndexError, ValueError):
         return jsonify({"success": False, "error": "Invalid time format"}), 400
     _timer_state["triggered"] = False
-    msg = f"Timer {'activated' if _timer_state['enabled'] else 'deactivated'}: {_timer_state['stop_hour']:02d}:{_timer_state['stop_minute']:02d} ({_timer_state['timezone']})"
+    msg = f"Temporizador de parada {'activado' if _timer_state['enabled'] else 'desactivado'}: {_timer_state['stop_hour']:02d}:{_timer_state['stop_minute']:02d} ({_timer_state['timezone']})"
     _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
     add_log("INFO", "timer", msg)
     return jsonify({"success": True, "state": _timer_state})
+
+
+@app.route('/set_start_timer', methods=['POST'])
+@require_token
+def set_start_timer():
+    data = request.json or {}
+    _timer_start_state["enabled"] = data.get("enabled", False)
+    start_time = data.get("start_time", "08:00")
+    parts = start_time.split(":")
+    try:
+        _timer_start_state["start_hour"] = int(parts[0])
+        _timer_start_state["start_minute"] = int(parts[1])
+    except (IndexError, ValueError):
+        return jsonify({"success": False, "error": "Invalid time format"}), 400
+    _timer_start_state["triggered"] = False
+    msg = f"Temporizador de inicio {'activado' if _timer_start_state['enabled'] else 'desactivado'}: {_timer_start_state['start_hour']:02d}:{_timer_start_state['start_minute']:02d}"
+    _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
+    add_log("INFO", "timer", msg)
+    return jsonify({"success": True})
 
 
 @app.route('/cancel_timer', methods=['POST'])
@@ -6710,27 +6740,119 @@ def set_timer():
 def cancel_timer():
     _timer_state["enabled"] = False
     _timer_state["triggered"] = False
-    msg = "Timer cancelled"
+    msg = "Temporizador de parada cancelado"
     _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
     add_log("INFO", "timer", msg)
     return jsonify({"success": True})
 
 
+@app.route('/cancel_start_timer', methods=['POST'])
+@require_token
+def cancel_start_timer():
+    _timer_start_state["enabled"] = False
+    _timer_start_state["triggered"] = False
+    msg = "Temporizador de inicio cancelado"
+    _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
+    add_log("INFO", "timer", msg)
+    return jsonify({"success": True})
+
+
+def _start_bot_by_timer():
+    global worker_bot_running
+    if worker_bot_running:
+        return False
+    try:
+        configs_dir = os.path.join(project_dir, 'Files', 'Configs')
+        config_files = [f for f in os.listdir(configs_dir) if f.endswith('.json')]
+        if not config_files:
+            add_log("ERROR", "timer", "No config files found to start bot")
+            return False
+        config_name = config_files[0].replace('.json', '')
+        config_path = os.path.join(configs_dir, config_files[0])
+        with open(config_path, 'r') as cf:
+            config_data = json.load(cf)
+        global config_streams_to_do, config_album_likes_rate, config_song_likes_rate
+        global config_play_full_song_perc, config_follows_rate, config_playtime_seconds
+        global config_links_batch_id, config_tidal_links_batch_id, config_apple_links_batch_id
+        global config_session_time, config_use_webhook, config_webhook_name
+        global config_webhook_url, config_webhook_interval, config_shuffle_perc
+        global config_search_links_perc, config_streaming_mode_only, config_use_clonned_apks
+        global config_selected_apps, config_spotify_playtime, config_tidal_playtime, config_apple_playtime
+        global worker_loaded_spotify_links, worker_loaded_tidal_links, worker_loaded_apple_links
+
+        config_streams_to_do = int(config_data.get('streams_to_do', 0))
+        if config_streams_to_do == 0:
+            config_streams_to_do = 99999999
+        config_album_likes_rate = int(config_data.get('album_likes_rate', 0))
+        config_song_likes_rate = int(config_data.get('song_likes_rate', 0))
+        config_follows_rate = int(config_data.get('follows_rate', 0))
+        config_play_full_song_perc = int(config_data.get('full_playtime_rate', 0))
+        config_playtime_seconds = config_data.get('playtime_seconds')
+        config_spotify_playtime = config_data.get('spotify_playtime', '') or ''
+        config_tidal_playtime = config_data.get('tidal_playtime', '') or ''
+        config_apple_playtime = config_data.get('apple_playtime', '') or ''
+        config_streaming_mode_only = config_data.get('streaming_mode_only')
+        config_use_clonned_apks = config_data.get('use_clonned_apks')
+        config_selected_apps = config_data.get('selected_apps', ['Spotify'])
+        config_session_time = int(config_data.get('session_time', 10))
+        config_links_batch_id = config_data.get('links_batch_id')
+        config_tidal_links_batch_id = config_data.get('tidal_links_batch_id')
+        config_apple_links_batch_id = config_data.get('apple_links_batch_id')
+        config_shuffle_perc = int(config_data.get('shuffle_perc', 0))
+        config_search_links_perc = int(config_data.get('search_links_perc', 0))
+        config_use_webhook = config_data.get('use_webhook', 'False')
+        config_webhook_name = config_data.get('webhook_name', '')
+        config_webhook_url = config_data.get('webhook_url', '')
+        config_webhook_interval = config_data.get('webhook_interval', '10')
+
+        worker_loaded_spotify_links = []
+        if config_links_batch_id:
+            batch = Batch.query.filter_by(id=config_links_batch_id, type='links').first()
+            if batch:
+                worker_loaded_spotify_links = batch.content.splitlines()
+        worker_loaded_tidal_links = []
+        if config_tidal_links_batch_id:
+            batch = Batch.query.filter_by(id=config_tidal_links_batch_id, type='tidal_links').first()
+            if batch:
+                worker_loaded_tidal_links = batch.content.splitlines()
+        worker_loaded_apple_links = []
+        if config_apple_links_batch_id:
+            batch = Batch.query.filter_by(id=config_apple_links_batch_id, type='apple_links').first()
+            if batch:
+                worker_loaded_apple_links = batch.content.splitlines()
+
+        worker_bot_running = True
+        bot_thread = threading.Thread(target=main_function, args=(config_data,))
+        bot_thread.start()
+        return True
+    except Exception as e:
+        add_log("ERROR", "timer", f"Failed to start bot: {e}")
+        return False
+
+
 def _timer_check_thread():
-    import importlib
     while True:
         try:
+            try:
+                from zoneinfo import ZoneInfo
+            except ImportError:
+                from backports.zoneinfo import ZoneInfo
+            tz = ZoneInfo(_timer_state["timezone"])
+            now = datetime.now(tz)
+            if _timer_start_state["enabled"] and not _timer_start_state["triggered"]:
+                if now.hour == _timer_start_state["start_hour"] and now.minute == _timer_start_state["start_minute"]:
+                    _timer_start_state["triggered"] = True
+                    _timer_start_state["enabled"] = False
+                    msg = f"TEMPORIZADOR DE INICIO EJECUTADO a las {now.strftime('%H:%M:%S')} — iniciando bot..."
+                    _timer_state["log"].append({"time": now.strftime("%H:%M:%S"), "msg": msg})
+                    add_log("SUCC", "timer", msg)
+                    if not worker_bot_running:
+                        _start_bot_by_timer()
             if _timer_state["enabled"] and not _timer_state["triggered"]:
-                try:
-                    from zoneinfo import ZoneInfo
-                except ImportError:
-                    from backports.zoneinfo import ZoneInfo
-                tz = ZoneInfo(_timer_state["timezone"])
-                now = datetime.now(tz)
                 if now.hour == _timer_state["stop_hour"] and now.minute == _timer_state["stop_minute"]:
                     _timer_state["triggered"] = True
                     _timer_state["enabled"] = False
-                    msg = f"TIMER TRIGGERED at {now.strftime('%H:%M:%S')} ({_timer_state['timezone']}) — stopping bot..."
+                    msg = f"TEMPORIZADOR DE PARADA EJECUTADO a las {now.strftime('%H:%M:%S')} — deteniendo bot..."
                     _timer_state["log"].append({"time": now.strftime("%H:%M:%S"), "msg": msg})
                     add_log("SUCC", "timer", msg)
                     try:
