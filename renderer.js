@@ -1153,7 +1153,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 configBtn: 'config',
                 analyticsBtn: 'analytics',
                 settingsBtn: 'settings',
-                chatBtn: 'chat'
+                chatBtn: 'chat',
+                timerBtn: 'timer'
             };
 
             Object.keys(sidebarButtons).forEach(buttonId => {
@@ -1292,6 +1293,94 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
             refreshChatStatus();
+
+            // ---- Timer ----
+            (function() {
+                const tzSelect = document.getElementById('timerTimezone');
+                const stopTimeInput = document.getElementById('timerStopTime');
+                const enabledCheck = document.getElementById('timerEnabled');
+                const saveBtn = document.getElementById('timerSaveBtn');
+                const cancelBtn = document.getElementById('timerCancelBtn');
+                const statusDiv = document.getElementById('timerStatus');
+                const logDiv = document.getElementById('timerLog');
+                const clockSpan = document.getElementById('timerCurrentClock');
+                if (!saveBtn) return;
+
+                function renderTimerLog(entries) {
+                    if (!entries || !entries.length) {
+                        logDiv.innerHTML = '<p style="color: #666;">No timer events yet.</p>';
+                        return;
+                    }
+                    logDiv.innerHTML = entries.map(e =>
+                        '<p style="margin:2px 0;"><span style="color:#5dade2;">[' + e.time + ']</span> ' + e.msg + '</p>'
+                    ).reverse().join('');
+                    logDiv.scrollTop = 0;
+                }
+
+                function loadTimerState() {
+                    fetch('http://localhost:8999/get_timer', { headers: { 'Authorization': 'Bearer ' + authToken } })
+                    .then(r => r.json())
+                    .then(d => {
+                        if (tzSelect) tzSelect.value = d.timezone || 'America/Mexico_City';
+                        if (stopTimeInput) stopTimeInput.value = String(d.stop_hour || 22).padStart(2, '0') + ':' + String(d.stop_minute || 0).padStart(2, '0');
+                        if (enabledCheck) enabledCheck.checked = d.enabled;
+                        if (d.enabled) {
+                            statusDiv.innerHTML = '<span style="color:#5dade2;">Timer active — stops at ' + stopTimeInput.value + ' (' + tzSelect.value + ')</span>';
+                        } else if (d.triggered) {
+                            statusDiv.innerHTML = '<span style="color:#e74c3c;">Timer triggered — bot was stopped.</span>';
+                        } else {
+                            statusDiv.innerHTML = '<span style="color:#888;">No timer active.</span>';
+                        }
+                        renderTimerLog(d.log);
+                    }).catch(() => {});
+                }
+
+                saveBtn.addEventListener('click', () => {
+                    const body = {
+                        enabled: enabledCheck.checked,
+                        timezone: tzSelect.value,
+                        stop_time: stopTimeInput.value
+                    };
+                    fetch('http://localhost:8999/set_timer', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                        body: JSON.stringify(body)
+                    })
+                    .then(r => r.json())
+                    .then(d => {
+                        if (d.success) {
+                            loadTimerState();
+                        } else {
+                            statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Unknown') + '</span>';
+                        }
+                    }).catch(err => {
+                        statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + err.message + '</span>';
+                    });
+                });
+
+                cancelBtn.addEventListener('click', () => {
+                    fetch('http://localhost:8999/cancel_timer', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + authToken }
+                    })
+                    .then(r => r.json())
+                    .then(() => loadTimerState())
+                    .catch(() => {});
+                });
+
+                setInterval(() => {
+                    const tz = tzSelect ? tzSelect.value : 'America/Mexico_City';
+                    try {
+                        const now = new Date();
+                        const str = now.toLocaleTimeString('en-GB', { timeZone: tz, hour12: false });
+                        if (clockSpan) clockSpan.textContent = str;
+                    } catch (e) {
+                        if (clockSpan) clockSpan.textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+                    }
+                }, 1000);
+
+                loadTimerState();
+            })();
 
             const startStopButton = document.getElementById('startStopButton');
             if (startStopButton) {
