@@ -1591,6 +1591,24 @@ def start_stop_bot():
 
             worker_threads.clear()
             worker_bot_running = False
+
+            apps_to_close = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
+            try:
+                result = subprocess.run([adb_path, 'devices', '-l'], stdout=subprocess.PIPE, text=True, startupinfo=startupinfo)
+                lines = result.stdout.strip().split('\n')[1:]
+                for line in lines:
+                    if '\tdevice' not in line and '   device ' not in line:
+                        continue
+                    udid = line.split()[0]
+                    for pkg in apps_to_close:
+                        try:
+                            subprocess.run([adb_path, '-s', udid, 'shell', 'am', 'force-stop', pkg],
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+                        except:
+                            pass
+            except:
+                pass
+
             ConsoleLogger.log_array.clear()
             ConsoleLogger.log_array.append('Spotifix 4.0.0 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
@@ -6950,6 +6968,31 @@ def _stop_bot():
                 thread.join(timeout=3)
         worker_threads.clear()
         worker_bot_running = False
+
+        apps_to_close = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
+        try:
+            result = subprocess.run([adb_path, 'devices', '-l'], stdout=subprocess.PIPE, text=True, startupinfo=startupinfo)
+            lines = result.stdout.strip().split('\n')[1:]
+            udids = []
+            for line in lines:
+                if '\tdevice' not in line and '   device ' not in line:
+                    continue
+                parts = line.split()
+                udid = parts[0]
+                if not udid.startswith('127.0.0.1:'):
+                    udids.append(udid)
+                else:
+                    udids.append(udid)
+            for udid in udids:
+                for pkg in apps_to_close:
+                    try:
+                        subprocess.run([adb_path, '-s', udid, 'shell', 'am', 'force-stop', pkg],
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+                    except:
+                        pass
+            _timer_log(f"Apps cerradas en {len(udids)} dispositivos: Spotify, Tidal, Apple Music")
+        except Exception as e:
+            _timer_log(f"Error cerrando apps: {e}")
     except Exception as e:
         worker_bot_running = False
         print(f"Error stopping bot: {e}")
