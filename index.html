@@ -1500,10 +1500,10 @@
                 <button type="button" id="chatResetButton" class="boton-elegante chat-reset">Nueva conversación</button>
             </div>
     </div>
-    <div id="timer" class="content-tab-scrollable">
-        <div style="max-width: 700px; margin: 0 auto; padding: 20px;">
+    <div id="timer" class="content-tab-scrollable" style="background: #111; padding: 20px;">
+        <div style="max-width: 700px; margin: 0 auto;">
             <div class="card" style="margin-bottom: 20px;">
-                <h2 style="margin-bottom: 20px;">Timezone</h2>
+                <h2 style="margin-bottom: 20px; color: #e0e0e0;">Timezone</h2>
                 <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
                     <select id="timerTimezone" style="flex: 1; min-width: 250px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                         <option value="America/Mexico_City" selected>Mexico City (UTC-6)</option>
@@ -1532,12 +1532,12 @@
             </div>
 
             <div class="card" style="margin-bottom: 20px;">
-                <h2 style="margin-bottom: 20px;">Stop Timer</h2>
+                <h2 style="margin-bottom: 20px; color: #e0e0e0;">Stop Timer</h2>
                 <p style="color: #aaa; font-size: 13px; margin-bottom: 15px;">The bot will automatically stop at the scheduled time in your selected timezone.</p>
                 <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 15px;">
-                    <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Stop at:</label>
+                    <label style="color: #e0e0e0; font-size: 14px; white-space: nowrap;">Stop at:</label>
                     <input type="time" id="timerStopTime" value="22:00" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #ccc;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #e0e0e0;">
                         <input type="checkbox" id="timerEnabled" style="width: 18px; height: 18px; accent-color: #5dade2;">
                         Enable
                     </label>
@@ -1550,7 +1550,7 @@
             </div>
 
             <div class="card">
-                <h2 style="margin-bottom: 15px;">Timer Log</h2>
+                <h2 style="margin-bottom: 15px; color: #e0e0e0;">Timer Log</h2>
                 <div id="timerLog" style="max-height: 200px; overflow-y: auto; font-size: 13px; color: #ccc; padding: 10px; background: #1a1a2e; border-radius: 6px; min-height: 60px;">
                     <p style="color: #666;">No timer events yet.</p>
                 </div>
