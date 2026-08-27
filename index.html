@@ -1069,6 +1069,7 @@
         <li><button id="analyticsBtn">Analytics</button></li>
         <li><button id="settingsBtn">Settings</button></li>
         <li><button id="chatBtn">IA</button></li>
+        <li><button id="timerBtn">Timer</button></li>
     </ul>
 </div>
 <div id="main-content">
@@ -1497,6 +1498,62 @@
                 <textarea id="chatInput" placeholder="Pregúntame o pídeme algo de la app, los dispositivos, login, actualizaciones..." rows="2"></textarea>
                 <button type="button" id="chatSendButton" class="boton-elegante">Enviar</button>
                 <button type="button" id="chatResetButton" class="boton-elegante chat-reset">Nueva conversación</button>
+            </div>
+    </div>
+    <div id="timer" class="content-tab-scrollable">
+        <div style="max-width: 700px; margin: 0 auto; padding: 20px;">
+            <div class="card" style="margin-bottom: 20px;">
+                <h2 style="margin-bottom: 20px;">Timezone</h2>
+                <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                    <select id="timerTimezone" style="flex: 1; min-width: 250px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                        <option value="America/Mexico_City" selected>Mexico City (UTC-6)</option>
+                        <option value="America/New_York">New York (UTC-5)</option>
+                        <option value="America/Los_Angeles">Los Angeles (UTC-8)</option>
+                        <option value="America/Chicago">Chicago (UTC-6)</option>
+                        <option value="Europe/Andorra">Andorra (UTC+1)</option>
+                        <option value="Europe/Madrid">Madrid / Barcelona (UTC+1)</option>
+                        <option value="Europe/London">London (UTC+0)</option>
+                        <option value="Europe/Berlin">Berlin (UTC+1)</option>
+                        <option value="Europe/Paris">Paris (UTC+1)</option>
+                        <option value="Asia/Dubai">Dubai (UTC+4)</option>
+                        <option value="Asia/Tokyo">Tokyo (UTC+9)</option>
+                        <option value="Asia/Shanghai">Shanghai (UTC+8)</option>
+                        <option value="Asia/Singapore">Singapore (UTC+8)</option>
+                        <option value="Australia/Sydney">Sydney (UTC+10)</option>
+                        <option value="America/Bogota">Bogota (UTC-5)</option>
+                        <option value="America/Buenos_Aires">Buenos Aires (UTC-3)</option>
+                        <option value="America/Sao_Paulo">Sao Paulo (UTC-3)</option>
+                        <option value="UTC">UTC (UTC+0)</option>
+                    </select>
+                    <div style="font-size: 13px; color: #aaa; white-space: nowrap;">
+                        <span id="timerCurrentClock">--:--:--</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card" style="margin-bottom: 20px;">
+                <h2 style="margin-bottom: 20px;">Stop Timer</h2>
+                <p style="color: #aaa; font-size: 13px; margin-bottom: 15px;">The bot will automatically stop at the scheduled time in your selected timezone.</p>
+                <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 15px;">
+                    <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Stop at:</label>
+                    <input type="time" id="timerStopTime" value="22:00" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #ccc;">
+                        <input type="checkbox" id="timerEnabled" style="width: 18px; height: 18px; accent-color: #5dade2;">
+                        Enable
+                    </label>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <button id="timerSaveBtn" class="boton-elegante" style="padding: 10px 20px;">Save & Activate</button>
+                    <button id="timerCancelBtn" class="boton-elegante" style="padding: 10px 20px; background: #e74c3c !important;">Cancel Timer</button>
+                </div>
+                <div id="timerStatus" style="margin-top: 15px; font-size: 14px; color: #aaa;"></div>
+            </div>
+
+            <div class="card">
+                <h2 style="margin-bottom: 15px;">Timer Log</h2>
+                <div id="timerLog" style="max-height: 200px; overflow-y: auto; font-size: 13px; color: #ccc; padding: 10px; background: #1a1a2e; border-radius: 6px; min-height: 60px;">
+                    <p style="color: #666;">No timer events yet.</p>
+                </div>
             </div>
         </div>
     </div>
