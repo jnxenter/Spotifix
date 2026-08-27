@@ -1726,14 +1726,30 @@ document.addEventListener('DOMContentLoaded', () => {
             function fetchWorkerThreads() {
                 fetch('http://localhost:8999/get_worker_threads', {
                     headers: {
-                        'Authorization': `Bearer ${authToken}` // Add the token here
+                        'Authorization': `Bearer ${authToken}`
                     }
                 })
                     .then(response => response.json())
                     .then(data => {
+                        const btn = document.getElementById('startStopButton');
+                        if (btn) {
+                            if (data.bot_running && btn.textContent === 'Start') {
+                                toggleStartStopButton();
+                                fetchWorkerStats();
+                                if (statsIntervalId) clearInterval(statsIntervalId);
+                                statsIntervalId = setInterval(fetchWorkerStats, 5000);
+                                fetchDashboard();
+                                setInterval(fetchDashboard, 8000);
+                                startTimer();
+                            } else if (!data.bot_running && btn.textContent === 'Stop') {
+                                toggleStartStopButton();
+                                clearBotIntervals();
+                            }
+                        }
+                        const threads = data.threads || [];
                         const threadsTableBody = document.querySelector('#threadsTable tbody');
                         threadsTableBody.innerHTML = '';
-                        data.forEach(thread => {
+                        threads.forEach(thread => {
                             const row = document.createElement('tr');
                             const pandaLabel = thread.panda_number ? `${thread.panda_number} | ` : '';
                             row.innerHTML = `
