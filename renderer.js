@@ -1426,6 +1426,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 1000);
 
                 loadTimerState();
+                setInterval(loadTimerState, 5000);
             })();
 
             const startStopButton = document.getElementById('startStopButton');
