@@ -1606,6 +1606,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     clearInterval(statsIntervalId);
                     statsIntervalId = null;
                 }
+                if (timerInterval) {
+                    clearInterval(timerInterval);
+                    timerInterval = null;
+                }
+                const timeEl = document.getElementById('timeRunning');
+                if (timeEl) timeEl.textContent = '00:00:00';
             }
 
             function startBot() {
