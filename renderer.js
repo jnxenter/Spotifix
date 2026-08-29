@@ -2186,10 +2186,10 @@ document.addEventListener('DOMContentLoaded', () => {
                         let html = '<table class="version-table">';
                         html += '<thead><tr><th>Panda #</th><th>Serial</th><th>Modelo</th><th>Android</th><th>SA sugerido</th></tr></thead><tbody>';
                         data.devices.forEach(d => {
-                            let sa = '';
-                            if (d.api === null || d.api === undefined) sa = '<span style="color:#888;">?</span>';
-                            else if (d.api < 12) sa = '<span style="color:#2ecc71;">SA 9-11</span>';
-                            else sa = '<span style="color:#e67e22;">SA 12-14</span>';
+                    let sa = '';
+                    if (d.api === null || d.api === undefined) sa = '<span style="color:#888;">?</span>';
+                    else if (d.api < 31) sa = '<span style="color:#2ecc71;">SA 9-11</span>';
+                    else sa = '<span style="color:#e67e22;">SA 12-14</span>';
                             html += '<tr>' +
                                 '<td><b>' + d.panda + '</b></td>' +
                                 '<td>' + d.serial + '</td>' +
