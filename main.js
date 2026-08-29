@@ -178,6 +178,22 @@ if (!gotTheLock) {
             }
         });
 
+        // Safety: re-send token until renderer confirms (avoids race where DOMContentLoaded
+        // registers the token listener after did-finish-load already fired).
+        let tokenRetries = 0;
+        const tokenRetryInterval = setInterval(() => {
+            if (!mainWindow || mainWindow.isDestroyed()) {
+                clearInterval(tokenRetryInterval);
+                return;
+            }
+            if (tokenRetries >= 10) {
+                clearInterval(tokenRetryInterval);
+                return;
+            }
+            tokenRetries += 1;
+            mainWindow.webContents.send('token-received', token);
+        }, 500);
+
         mainWindow.on('closed', () => {
             mainWindow = null;
             cleanUpAndQuit();
