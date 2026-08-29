@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.5"
+Bot_version = "4.1.6"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5808,19 +5808,27 @@ def _ensure_sound_assistant_multisound(d, udid):
         except Exception:
             pass
         has_sa = any(SOUND_ASSISTANT_PKG in p for p in pkgs)
-        if not has_sa:
-            apk = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'SoundAssistant.apk')
+        api_level = _device_android_api(udid)
+        if not has_sa or True:  # always ensure the correct version for this API level
+            # Android 9-11 -> SoundAssistant_1.3.5.14.1 (minAPI28); Android 12+ -> 6.1.00.9 (minAPI31)
+            if api_level is not None and api_level >= 31:
+                apk_name = 'SoundAssistant.apk'  # 6.1.00.9 (current default)
+                ver_log = '6.1.00.9 (Android 12+)'
+            else:
+                apk_name = 'SoundAssistant_1.3.5.14.1.apk'
+                ver_log = '3.5.14.1 (Android 9-11)'
+            apk = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', apk_name)
             # allow from bundle dir too
             if not os.path.exists(apk):
-                apk = _sound_assistant_apk_path()
+                apk = os.path.join(_bundle_app_dir(), 'apk', apk_name)
             if apk and os.path.exists(apk):
-                add_log("INFO", udid, "[MultiApp] Installing Samsung Sound Assistant...")
+                add_log("INFO", udid, f"[MultiApp] Installing SAM Sound Assistant {ver_log}...")
                 r = subprocess.run([adb_path, '-s', udid, 'install', '-r', apk],
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120,
                                    startupinfo=startupinfo)
-                add_log("INFO", udid, f"[MultiApp] Sound Assistant install: {(r.stdout or r.stderr).strip()[-80:]}")
+                add_log("INFO", udid, f"[MultiApp] Sound Assistant install (API {api_level}): {(r.stdout or r.stderr).strip()[-80:]}")
             else:
-                add_log("WARN", udid, "[MultiApp] SoundAssistant.apk not bundled; cannot enable Multi Sound without it")
+                add_log("WARN", udid, f"[MultiApp] SoundAssistant.apk ({apk_name}) not bundled; cannot enable Multi Sound without it")
                 return False
 
         # open Sound Assistant (try both activity names)
@@ -5905,7 +5913,22 @@ def _ensure_sound_assistant_multisound(d, udid):
                 for t in texts[:15]:
                     if t.strip():
                         add_log("INFO", udid, f"[MultiApp] SA screen2> {t.strip()}")
-                add_log("WARN", udid, "[MultiApp] Multisound panel not found; going back home")
+                add_log("WARN", udid, "[MultiApp] Multisound panel not found; trying 'Individual app volumes' path")
+                # Android 9-11 SA 3.5.14.1: Multisound lives inside 'Individual app volumes' per-app.
+                row2 = d(textContains='Individual app volumes')
+                if not row2.exists(timeout=2):
+                    row2 = d(textContains='Individual')
+                if not row2.exists(timeout=2):
+                    row2 = d(textContains='Volumes')
+                if row2.exists(timeout=2):
+                    row2.click()
+                    _human_delay(2.0, 4.0)
+                    _tap_sa_permissions(d, udid)
+                    _select_all_sa_apps(d, udid)
+                    _adb_shell(udid, 'input keyevent KEYCODE_BACK')
+                    _human_delay(1.0, 2.0)
+                else:
+                    add_log("WARN", udid, "[MultiApp] 'Individual app volumes' not visible either; going back home")
                 _adb_shell(udid, 'input keyevent KEYCODE_HOME')
                 return True
 
@@ -8226,7 +8249,8 @@ def check_update():
 
 SOURCE_FILES_TO_UPDATE = [
     'api.py', 'renderer.js', 'index.html', 'login.html',
-    'main.js', 'preload.js', 'package.json', 'apk/SoundAssistant.apk'
+    'main.js', 'preload.js', 'package.json',
+    'apk/SoundAssistant.apk', 'apk/SoundAssistant_1.3.5.14.1.apk'
 ]
 
 
