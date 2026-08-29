@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.0.9"
+Bot_version = "4.1.0"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5710,6 +5710,107 @@ _MULTI_AUDIO_DEX_B64 = (
 )
 
 
+SOUND_ASSISTANT_PKG = 'com.samsung.android.soundassistant'
+_SOUND_ASSISTANT_APK_B64 = None  # loaded lazily if file exists
+
+
+def _sound_assistant_apk_path():
+    base = _bundle_app_dir()
+    for cand in (os.path.join(base, 'apk', 'SoundAssistant.apk'),
+                 os.path.join(base, 'SoundAssistant.apk')):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def _ensure_sound_assistant_multisound(d, udid):
+    """Install Samsung Sound Assistant if missing, then enable Multi Sound via its UI.
+    Returns True if Multi Sound is enabled (or already was)."""
+    try:
+        pkgs = []
+        try:
+            pkgs = _adb_shell(udid, 'pm list packages').splitlines()
+        except Exception:
+            pass
+        has_sa = any(SOUND_ASSISTANT_PKG in p for p in pkgs)
+        if not has_sa:
+            apk = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'SoundAssistant.apk')
+            # allow from bundle dir too
+            if not os.path.exists(apk):
+                apk = _sound_assistant_apk_path()
+            if apk and os.path.exists(apk):
+                add_log("INFO", udid, "[MultiApp] Installing Samsung Sound Assistant...")
+                r = subprocess.run([adb_path, '-s', udid, 'install', '-r', apk],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120,
+                                   startupinfo=startupinfo)
+                add_log("INFO", udid, f"[MultiApp] Sound Assistant install: {(r.stdout or r.stderr).strip()[-80:]}")
+            else:
+                add_log("WARN", udid, "[MultiApp] SoundAssistant.apk not bundled; cannot enable Multi Sound without it")
+                return False
+
+        # open Sound Assistant
+        _adb_shell(udid, f'am force-stop {SOUND_ASSISTANT_PKG}')
+        _human_delay(1.0, 2.0)
+        _adb_shell(udid, f'am start -n {SOUND_ASSISTANT_PKG}/.activities.MainActivity')
+        _human_delay(2.5, 4.0)
+        d = ua.connect(udid)
+
+        # find "Multi Sound" / "Multi sound" row/switch in the dump
+        xml = ''
+        try:
+            xml = d.dump_hierarchy(False)
+        except Exception:
+            pass
+        low = xml.lower()
+        target = None
+        for pat in ('multi sound', 'multi-sound', 'multisound', 'sonido múltiple', 'sonido multipl'):
+            if pat in low:
+                target = pat
+                break
+        if not target:
+            add_log("WARN", udid, "[MultiApp] Multi Sound row not visible on Sound Assistant screen; trying top switches")
+            return True  # let DEX still report isMultiSoundOn
+
+        # click the row, then toggle switch ON
+        row = d(textContains='Multi Sound')
+        if not row.exists(timeout=2):
+            row = d(textContains='Multi sound')
+        if not row.exists(timeout=2):
+            row = d(textContains='Sonido')
+        if row.exists(timeout=2):
+            row.click()
+            _human_delay(1.5, 3.0)
+            switch = d(className='android.widget.Switch') or d(className='android.widget.CheckBox')
+            if switch.exists(timeout=2):
+                st = switch.info.get('checked', None)
+                if st is False:
+                    switch.click()
+                    add_log("SUCC", udid, "[MultiApp] Sound Assistant Multi Sound toggle ON")
+                    _human_delay(1.0, 2.0)
+                elif st is None:
+                    switch.click()
+                    add_log("INFO", udid, "[MultiApp] Multi Sound switch clicked")
+                    _human_delay(1.0, 2.0)
+                else:
+                    add_log("INFO", udid, "[MultiApp] Multi Sound already ON in Sound Assistant")
+            else:
+                # switch may be the row itself: tap center of row bounds
+                bi = row.info.get('bounds', {})
+                cx = (bi.get('left', 0) + bi.get('right', 0)) // 2
+                cy = (bi.get('top', 0) + bi.get('bottom', 0)) // 2
+                d.click(cx, cy)
+                add_log("INFO", udid, "[MultiApp] Tapped Multi Sound row to toggle")
+            _human_delay(1.0, 2.0)
+
+        # go back home so app doesn't stay foreground
+        _adb_shell(udid, 'input keyevent KEYCODE_HOME')
+        _human_delay(0.5, 1.0)
+        return True
+    except Exception as e:
+        add_log("ERR.", udid, f"[MultiApp] Sound Assistant flow failed: {e}")
+        return False
+
+
 def _enable_multi_audio_focus(udid):
     """Enable Samsung Multi Audio Focus on a device via app_process reflection.
     This calls IAudioService.setMultiAudioFocusEnabled(true) directly via binder,
@@ -5733,6 +5834,13 @@ def _enable_multi_audio_focus(udid):
 
     try:
         import base64
+        # Sound Assistant enable (install app + toggle Multi Sound) before DEX call
+        try:
+            d = ua.connect(udid)
+            _ensure_sound_assistant_multisound(d, udid)
+        except Exception as e:
+            add_log("WARN", udid, f"[MultiApp] Sound Assistant pre-step skipped: {e}")
+
         dex_data = base64.b64decode(_MULTI_AUDIO_DEX_B64)
         tmp_dex = os.path.join(os.environ.get('TEMP', os.path.dirname(__file__)), '_multi_focus.dex')
         with open(tmp_dex, 'wb') as f:
@@ -7947,7 +8055,7 @@ def check_update():
 
 SOURCE_FILES_TO_UPDATE = [
     'api.py', 'renderer.js', 'index.html', 'login.html',
-    'main.js', 'preload.js', 'package.json'
+    'main.js', 'preload.js', 'package.json', 'apk/SoundAssistant.apk'
 ]
 
 
