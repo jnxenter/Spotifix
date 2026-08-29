@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.0"
+Bot_version = "4.1.1"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5811,16 +5811,33 @@ def _ensure_sound_assistant_multisound(d, udid):
         return False
 
 
+def _device_android_api(udid):
+    """Return Android API level (e.g. 30 = Android 11, 29 = Android 10). None if unknown."""
+    try:
+        out = _adb_shell(udid, 'getprop ro.build.version.sdk')
+        return int(out.strip()) if out.strip().isdigit() else None
+    except Exception:
+        return None
+
+
 def _enable_multi_audio_focus(udid):
-    """Enable Samsung Multi Audio Focus on a device via app_process reflection.
-    This calls IAudioService.setMultiAudioFocusEnabled(true) directly via binder,
-    bypassing the need for Sound Assistant / Knox. Requires root."""
+    """Enable Samsung Multi Audio Focus on a device.
+    Android 10/11 (OneUI 2-4): use setMultiAudioFocusEnabled DEX directly (works w/o Sound Assistant).
+    Android 12+ (OneUI 5-7): Samsung uses setMultiSoundOn + typically needs Sound Assistant;
+    we still try DEX first then Sound Assistant."""
     try:
         out = _adb_shell(udid, 'dumpsys audio')
         if 'Multi Audio Focus enabled :true' in out:
             return True
     except:
         pass
+
+    api_level = _device_android_api(udid)
+    add_log("INFO", udid, f"[MultiApp] Android API level: {api_level}")
+
+    # For Android 10/11 (API < 31): old one-click DEX is the known-good path.
+    if api_level is not None and api_level < 31:
+        add_log("SUCC", udid, "[MultiApp] Android <12: Multi Audio Focus via setMultiAudioFocusEnabled flow only")
 
     try:
         uid_out = _adb_shell(udid, 'id')
@@ -5834,12 +5851,15 @@ def _enable_multi_audio_focus(udid):
 
     try:
         import base64
-        # Sound Assistant enable (install app + toggle Multi Sound) before DEX call
-        try:
-            d = ua.connect(udid)
-            _ensure_sound_assistant_multisound(d, udid)
-        except Exception as e:
-            add_log("WARN", udid, f"[MultiApp] Sound Assistant pre-step skipped: {e}")
+        # Sound Assistant only helps on OneUI 5+/Android 12+; Android 10/11 use DEX direct.
+        if api_level is None or api_level >= 31:
+            try:
+                d = ua.connect(udid)
+                _ensure_sound_assistant_multisound(d, udid)
+            except Exception as e:
+                add_log("WARN", udid, f"[MultiApp] Sound Assistant pre-step skipped: {e}")
+        else:
+            add_log("INFO", udid, "[MultiApp] Android <12: skipping Sound Assistant (DEX direct)")
 
         dex_data = base64.b64decode(_MULTI_AUDIO_DEX_B64)
         tmp_dex = os.path.join(os.environ.get('TEMP', os.path.dirname(__file__)), '_multi_focus.dex')
