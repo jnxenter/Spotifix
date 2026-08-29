@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.4"
+Bot_version = "4.1.5"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5840,12 +5840,55 @@ def _ensure_sound_assistant_multisound(d, udid):
         except Exception:
             pass
         low = xml.lower()
+
+        # First-use/onboarding tap on Sound Assistant (Empezar/Get started/Siguiente...)
+        for rnd in range(3):
+            try:
+                xml = d.dump_hierarchy(False)
+                low = xml.lower()
+            except Exception:
+                low = ''
+            if any(p in low for p in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl')):
+                break
+            tapped = False
+            for txt in ('Empezar', 'Get Started', 'Empezar ahora', 'Siguiente', 'Next', 'Continuar', 'Continue',
+                        'Configurar', 'Set up', 'Empezar a explorar', 'Start', 'Comenzar'):
+                el = d(text=txt) or d(textContains=txt)
+                if el.exists(timeout=1):
+                    el.click()
+                    tapped = True
+                    add_log("INFO", udid, f"[MultiApp] SA onboarding tapped: '{txt}'")
+                    _human_delay(1.5, 3.0)
+                    break
+            if tapped:
+                continue
+            # if onboarding dialog has just OK/Aceptar
+            el = d(text='OK') or d(text='Aceptar')
+            if el.exists(timeout=1):
+                el.click()
+                add_log("INFO", udid, "[MultiApp] SA onboarding OK tapped")
+                _human_delay(1.5, 3.0)
+                continue
+            break
+
+        # Rebuild: if still no Multisound, log the visible texts for debugging
+        try:
+            xml = d.dump_hierarchy(False)
+            low = xml.lower()
+        except Exception:
+            low = ''
         target = None
         for pat in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl'):
             if pat in low:
                 target = pat
                 break
         if not target:
+            # log first 15 texts for diagnosis
+            import re as _re
+            texts = _re.findall(r'text="([^"]{2,50})"', xml or '')
+            for t in texts[:15]:
+                if t.strip():
+                    add_log("INFO", udid, f"[MultiApp] SA screen> {t.strip()}")
             add_log("WARN", udid, "[MultiApp] Multi Sound row not visible on Sound Assistant screen; trying re-open")
             _adb_shell(udid, 'input keyevent KEYCODE_BACK')
             _human_delay(1.5, 2.5)
@@ -5857,7 +5900,11 @@ def _ensure_sound_assistant_multisound(d, udid):
                 low = xml.lower()
             except Exception:
                 low = ''
-            if not any(p in low for p in ('multisound', 'multi sound', 'multi-sound', 'multisound')):
+            if not any(p in low for p in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl')):
+                texts = _re.findall(r'text="([^"]{2,50})"', xml or '')
+                for t in texts[:15]:
+                    if t.strip():
+                        add_log("INFO", udid, f"[MultiApp] SA screen2> {t.strip()}")
                 add_log("WARN", udid, "[MultiApp] Multisound panel not found; going back home")
                 _adb_shell(udid, 'input keyevent KEYCODE_HOME')
                 return True
