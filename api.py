@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.3"
+Bot_version = "4.1.4"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -8203,17 +8203,24 @@ def install_update():
         ctx.verify_mode = ssl.CERT_NONE
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
         for fname in SOURCE_FILES_TO_UPDATE:
-            # Use the GitHub Contents API (no CDN cache) so we always get the newest file
+            # Use the GitHub Contents API (no CDN cache) so we always get the newest file.
+            # Note: for >1MB files GitHub returns empty content + download_url, so fall back to it.
             raw_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{fname}?ref={branch}"
             dest = os.path.join(app_dir, fname)
             try:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
                 req = urllib.request.Request(raw_url, headers={'User-Agent': 'Spotifix-Updater'})
                 resp = opener.open(req, timeout=30)
                 meta = json.loads(resp.read().decode())
-                if 'content' in meta:
+                data = None
+                if 'content' in meta and meta['content']:
                     import base64
                     data = base64.b64decode(meta['content'])
-                else:
+                elif meta.get('download_url'):
+                    resp2 = opener.open(meta['download_url'], timeout=60)
+                    data = resp2.read()
+                if data is None or len(data) == 0:
+                    failed.append(f"{fname}: empty download")
                     continue
                 with open(dest, 'wb') as f:
                     f.write(data)
