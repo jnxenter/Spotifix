@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.2"
+Bot_version = "4.1.3"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5723,9 +5723,84 @@ def _sound_assistant_apk_path():
     return None
 
 
+_SA_PERM_TEXTS = ('Sí, continuar', 'Allow', 'Permitir', 'Yes', 'OK', 'Aceptar', 'Accept',
+                  'Continuar', 'Continue', 'Permitir siempre', 'Allow always', 'Abrir', 'Open')
+
+
+def _tap_sa_permissions(d, udid):
+    """Accept any permission dialog/popup that Sound Assistant may show (ignoring 'no' options)."""
+    try:
+        clicked = False
+        for txt in _SA_PERM_TEXTS:
+            el = d(text=txt) or d(textContains=txt)
+            if el.exists(timeout=1):
+                el.click()
+                clicked = True
+                add_log("INFO", udid, f"[MultiApp] SA permission accepted: '{txt}'")
+                _human_delay(1.0, 2.0)
+        return clicked
+    except Exception as e:
+        add_log("WARN", udid, f"[MultiApp] SA permission tap failed: {e}")
+        return False
+
+
+def _select_all_sa_apps(d, udid):
+    """After opening the Multisound app-select screen, tick ALL apps (Spotify, Apple Music, ...)."""
+    try:
+        for attempt in range(4):
+            xml = ''
+            try:
+                xml = d.dump_hierarchy(False)
+            except Exception:
+                pass
+            if not xml:
+                _human_delay(1.5, 2.5)
+                continue
+            low = xml.lower()
+            # on the app picker screen: look for rows with app names
+            has_screen = ('spotify' in low or 'apple' in low or 'tidal' in low or 'seleccion' in low or 'select' in low)
+            if not has_screen and attempt < 3:
+                # maybe panel main screen; tap the Multisound row again or search icon
+                _human_delay(1.5, 2.5)
+                continue
+
+            found = False
+            for app_name in ('spotify', 'apple music', 'tidal'):
+                el = d(textContains=app_name)
+                if not el.exists(timeout=1):
+                    continue
+                # tap the row/list item to toggle it ON
+                try:
+                    bi = el.info.get('bounds', {})
+                    cx = (bi.get('left', 0) + bi.get('right', 0)) // 2
+                    cy = (bi.get('top', 0) + bi.get('bottom', 0)) // 2
+                    d.click(cx, cy)
+                    found = True
+                    add_log("INFO", udid, f"[MultiApp] SA app selected: {app_name}")
+                    _human_delay(0.6, 1.2)
+                except Exception:
+                    continue
+            if found:
+                # try to confirm/save if a button exists
+                for txt in ('Siguiente', 'Next', 'Listo', 'Done', 'OK', 'Aceptar', 'Guardar', 'Save'):
+                    el = d(text=txt)
+                    if el.exists(timeout=1):
+                        el.click()
+                        add_log("INFO", udid, f"[MultiApp] SA app list saved ({txt})")
+                        _human_delay(1.0, 2.0)
+                        break
+                return True
+            _human_delay(1.5, 2.5)
+        return True
+    except Exception as e:
+        add_log("WARN", udid, f"[MultiApp] SA app select failed: {e}")
+        return True
+
+
 def _ensure_sound_assistant_multisound(d, udid):
     """Install Samsung Sound Assistant if missing, then enable Multi Sound via its UI.
-    Returns True if Multi Sound is enabled (or already was)."""
+    On the Multisound panel: activate it AND select all apps (Spotify, Apple Music, Tidal...).
+    Accepts permission popups. Returns True if flow completed."""
     try:
         pkgs = []
         try:
@@ -5748,14 +5823,17 @@ def _ensure_sound_assistant_multisound(d, udid):
                 add_log("WARN", udid, "[MultiApp] SoundAssistant.apk not bundled; cannot enable Multi Sound without it")
                 return False
 
-        # open Sound Assistant
+        # open Sound Assistant (try both activity names)
         _adb_shell(udid, f'am force-stop {SOUND_ASSISTANT_PKG}')
         _human_delay(1.0, 2.0)
-        _adb_shell(udid, f'am start -n {SOUND_ASSISTANT_PKG}/.activities.MainActivity')
-        _human_delay(2.5, 4.0)
+        got = _adb_shell(udid, f'am start -n {SOUND_ASSISTANT_PKG}/.activities.MainActivity')
+        if 'Error' in got or 'does not exist' in got:
+            got = _adb_shell(udid, f'am start -n {SOUND_ASSISTANT_PKG}/com.samsung.android.soundassistant.MainActivity')
+        _human_delay(3.0, 5.0)
+        _tap_sa_permissions(d, udid)
         d = ua.connect(udid)
 
-        # find "Multisound" row/switch in the dump (SoundAssistant 3.5.14.1 uses "Multisound")
+        # find "Multisound" row/switch in the dump
         xml = ''
         try:
             xml = d.dump_hierarchy(False)
@@ -5763,15 +5841,28 @@ def _ensure_sound_assistant_multisound(d, udid):
             pass
         low = xml.lower()
         target = None
-        for pat in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl', 'multi-sound'):
+        for pat in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl'):
             if pat in low:
                 target = pat
                 break
         if not target:
-            add_log("WARN", udid, "[MultiApp] Multi Sound row not visible on Sound Assistant screen; trying screen click")
-            return True  # let DEX still report isMultiSoundOn
+            add_log("WARN", udid, "[MultiApp] Multi Sound row not visible on Sound Assistant screen; trying re-open")
+            _adb_shell(udid, 'input keyevent KEYCODE_BACK')
+            _human_delay(1.5, 2.5)
+            _adb_shell(udid, f'am start -n {SOUND_ASSISTANT_PKG}/.activities.MainActivity')
+            _human_delay(3.0, 5.0)
+            _tap_sa_permissions(d, udid)
+            try:
+                xml = d.dump_hierarchy(False)
+                low = xml.lower()
+            except Exception:
+                low = ''
+            if not any(p in low for p in ('multisound', 'multi sound', 'multi-sound', 'multisound')):
+                add_log("WARN", udid, "[MultiApp] Multisound panel not found; going back home")
+                _adb_shell(udid, 'input keyevent KEYCODE_HOME')
+                return True
 
-        # click the row, then toggle switch ON
+        # click the row
         row = d(textContains='Multisound')
         if not row.exists(timeout=2):
             row = d(textContains='Multi Sound')
@@ -5781,7 +5872,10 @@ def _ensure_sound_assistant_multisound(d, udid):
             row = d(textContains='Sonido')
         if row.exists(timeout=2):
             row.click()
-            _human_delay(1.5, 3.0)
+            _human_delay(2.0, 4.0)
+            _tap_sa_permissions(d, udid)
+
+            # toggle switch ON if present
             switch = d(className='android.widget.Switch') or d(className='android.widget.CheckBox')
             if switch.exists(timeout=2):
                 st = switch.info.get('checked', None)
@@ -5796,17 +5890,28 @@ def _ensure_sound_assistant_multisound(d, udid):
                 else:
                     add_log("INFO", udid, "[MultiApp] Multi Sound already ON in Sound Assistant")
             else:
-                # switch may be the row itself: tap center of row bounds
                 bi = row.info.get('bounds', {})
                 cx = (bi.get('left', 0) + bi.get('right', 0)) // 2
                 cy = (bi.get('top', 0) + bi.get('bottom', 0)) // 2
                 d.click(cx, cy)
                 add_log("INFO", udid, "[MultiApp] Tapped Multi Sound row to toggle")
+                _human_delay(1.0, 2.0)
+
+            # now select all apps in the Multisound panel
+            _select_all_sa_apps(d, udid)
+            _adb_shell(udid, 'input keyevent KEYCODE_BACK')
+            _human_delay(1.0, 2.0)
+
+        else:
+            # no row found: maybe already in panel; try selecting apps anyway
+            _select_all_sa_apps(d, udid)
+            _adb_shell(udid, 'input keyevent KEYCODE_BACK')
             _human_delay(1.0, 2.0)
 
         # go back home so app doesn't stay foreground
         _adb_shell(udid, 'input keyevent KEYCODE_HOME')
         _human_delay(0.5, 1.0)
+        add_log("SUCC", udid, "[MultiApp] Sound Assistant Multi Sound setup complete")
         return True
     except Exception as e:
         add_log("ERR.", udid, f"[MultiApp] Sound Assistant flow failed: {e}")
