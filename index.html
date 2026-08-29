@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SpotiFix 4.0.3</title>
+    <title>SpotiFix 4.0.2</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1/moment.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.0"></script>
@@ -481,42 +481,6 @@
             background-color: #c82333;
         }
 
-        .toggle-switch {
-            position: relative;
-            display: inline-block;
-            width: 44px;
-            height: 24px;
-        }
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-        .toggle-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background-color: #555;
-            border-radius: 24px;
-            transition: 0.3s;
-        }
-        .toggle-slider:before {
-            content: "";
-            position: absolute;
-            height: 18px;
-            width: 18px;
-            left: 3px;
-            bottom: 3px;
-            background-color: #fff;
-            border-radius: 50%;
-            transition: 0.3s;
-        }
-        .toggle-switch input:checked + .toggle-slider {
-            background-color: #2ecc71;
-        }
-        .toggle-switch input:checked + .toggle-slider:before {
-            transform: translateX(20px);
-        }
         .boton-elegante {
             padding: 8px 15px;
             border: 2px solid #2c2c2c;
@@ -1079,7 +1043,7 @@
 <div class="title-bar">
     <div class="background-image"></div>
     <div class="title">
-        <span style="margin-left: 10px;">Spotifix 4.0.3</span>
+        <span style="margin-left: 10px;">Spotifix 4.0.2</span>
     </div>
     <div class="title-bar-buttons" style="display: flex; align-items: center;">
         <button id="minimize-btn">
@@ -1427,6 +1391,14 @@
                 </div>
             </div>
             <div class="card">
+                <h2>Proxy Settings</h2>
+                <div class="form-group">
+                    <label for="validate-proxy">Validar Proxy antes de iniciar:</label>
+                    <input type="checkbox" id="validate-proxy" name="validate-proxy">
+                </div>
+                <p style="color: #888; font-size: 12px; margin-top: 5px;">Verifica Super Proxy en cada dispositivo antes de abrir apps. Si no conecta en 5 intentos, alerta a Discord y salta ese tel&eacute;fono. Revisa cada 8 horas durante la sesi&oacute;n.</p>
+            </div>
+            <div class="card">
                 <h2>Webhook Settings</h2>
                 <div class="form-group">
                     <label for="use-webhook">Use Webhook for Statistics:</label>
@@ -1508,7 +1480,7 @@
         </div>
         <div class="card card-large">
             <h2>Update</h2>
-            <p class="login-help" id="updateCurrentVersion">Current version: 4.0.3</p>
+            <p class="login-help" id="updateCurrentVersion">Current version: 4.0.2</p>
             <div id="updateStatus" style="margin-bottom: 1rem; min-height: 24px;"></div>
             <div class="form-group">
                 <button id="checkUpdateButton" class="boton-elegante">Check for Updates</button>
@@ -1566,45 +1538,137 @@
                 </div>
             </div>
         </div>
-        <div class="card" style="margin-bottom: 20px;">
-            <h2 style="margin-bottom: 20px;">Temporizador de Inicio</h2>
-            <p style="color: #aaa; font-size: 13px; margin-bottom: 15px;">El bot iniciar&aacute; autom&aacute;ticamente a la hora programada (clic en Start).</p>
-            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 15px;">
+        <!-- ALL -->
+        <div class="card" style="margin-bottom: 20px; border-left: 3px solid #f1c40f;">
+            <h2 style="margin-bottom: 15px;">All</h2>
+            <p style="color: #aaa; font-size: 13px; margin-bottom: 15px;">Inicia o detiene el bot completo (todas las apps).</p>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px;">
                 <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Iniciar a las:</label>
-                <select id="timerStartHour" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-hour" data-app="all" data-action="start" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                     <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8" selected>8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
                 </select>
                 <span style="color:#888;">:</span>
-                <input type="number" id="timerStartMin" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
-                <select id="timerStartAmpm" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <input type="number" class="timer-min" data-app="all" data-action="start" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-ampm" data-app="all" data-action="start" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                     <option value="AM">AM</option><option value="PM">PM</option>
                 </select>
+                <button class="boton-elegante timer-save-btn" data-app="all" data-action="start" style="padding: 10px 16px;">Guardar y Activar</button>
+                <button class="boton-elegante timer-cancel-btn" data-app="all" data-action="start" style="padding: 10px 16px; background: #e74c3c !important;">Desactivar</button>
             </div>
-            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                <button id="timerStartSaveBtn" class="boton-elegante" style="padding: 10px 20px;">Guardar y Activar</button>
-                <button id="timerStartCancelBtn" class="boton-elegante" style="padding: 10px 20px; background: #e74c3c !important;">Desactivar</button>
-            </div>
-            <div id="timerStartStatus" style="margin-top: 15px; font-size: 14px; color: #aaa;"></div>
-        </div>
-        <div class="card" style="margin-bottom: 20px;">
-            <h2 style="margin-bottom: 20px;">Temporizador de Parada</h2>
-            <p style="color: #aaa; font-size: 13px; margin-bottom: 15px;">El bot se detendr&aacute; autom&aacute;ticamente a la hora programada en tu zona horaria.</p>
-            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 15px;">
+            <div class="timer-status" data-app="all" data-action="start" style="font-size: 13px; color: #aaa; margin-bottom: 12px;"></div>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px;">
                 <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Detener a las:</label>
-                <select id="timerStopHour" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-hour" data-app="all" data-action="stop" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                     <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
                 </select>
                 <span style="color:#888;">:</span>
-                <input type="number" id="timerStopMin" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
-                <select id="timerStopAmpm" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <input type="number" class="timer-min" data-app="all" data-action="stop" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-ampm" data-app="all" data-action="stop" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
                     <option value="AM">AM</option><option value="PM" selected>PM</option>
                 </select>
+                <button class="boton-elegante timer-save-btn" data-app="all" data-action="stop" style="padding: 10px 16px;">Guardar y Activar</button>
+                <button class="boton-elegante timer-cancel-btn" data-app="all" data-action="stop" style="padding: 10px 16px; background: #e74c3c !important;">Desactivar</button>
             </div>
-            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
-                <button id="timerSaveBtn" class="boton-elegante" style="padding: 10px 20px;">Guardar y Activar</button>
-                <button id="timerCancelBtn" class="boton-elegante" style="padding: 10px 20px; background: #e74c3c !important;">Desactivar</button>
+            <div class="timer-status" data-app="all" data-action="stop" style="font-size: 13px; color: #aaa;"></div>
+        </div>
+        <!-- SPOTIFY -->
+        <div class="card" style="margin-bottom: 20px; border-left: 3px solid #1DB954;">
+            <h2 style="margin-bottom: 15px;">Spotify</h2>
+            <p style="color: #aaa; font-size: 13px; margin-bottom: 15px;">Pausa/reanuda solo Spotify. Las dem&aacute;s apps siguen funcionando.</p>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px;">
+                <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Reanudar a las:</label>
+                <select class="timer-hour" data-app="spotify" data-action="start" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8" selected>8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+                </select>
+                <span style="color:#888;">:</span>
+                <input type="number" class="timer-min" data-app="spotify" data-action="start" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-ampm" data-app="spotify" data-action="start" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="AM">AM</option><option value="PM">PM</option>
+                </select>
+                <button class="boton-elegante timer-save-btn" data-app="spotify" data-action="start" style="padding: 10px 16px;">Guardar y Activar</button>
+                <button class="boton-elegante timer-cancel-btn" data-app="spotify" data-action="start" style="padding: 10px 16px; background: #e74c3c !important;">Desactivar</button>
             </div>
-            <div id="timerStatus" style="margin-top: 15px; font-size: 14px; color: #aaa;"></div>
+            <div class="timer-status" data-app="spotify" data-action="start" style="font-size: 13px; color: #aaa; margin-bottom: 12px;"></div>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px;">
+                <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Pausar a las:</label>
+                <select class="timer-hour" data-app="spotify" data-action="stop" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+                </select>
+                <span style="color:#888;">:</span>
+                <input type="number" class="timer-min" data-app="spotify" data-action="stop" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-ampm" data-app="spotify" data-action="stop" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="AM">AM</option><option value="PM" selected>PM</option>
+                </select>
+                <button class="boton-elegante timer-save-btn" data-app="spotify" data-action="stop" style="padding: 10px 16px;">Guardar y Activar</button>
+                <button class="boton-elegante timer-cancel-btn" data-app="spotify" data-action="stop" style="padding: 10px 16px; background: #e74c3c !important;">Desactivar</button>
+            </div>
+            <div class="timer-status" data-app="spotify" data-action="stop" style="font-size: 13px; color: #aaa;"></div>
+        </div>
+        <!-- TIDAL -->
+        <div class="card" style="margin-bottom: 20px; border-left: 3px solid #00FFFF;">
+            <h2 style="margin-bottom: 15px;">Tidal</h2>
+            <p style="color: #aaa; font-size: 13px; margin-bottom: 15px;">Pausa/reanuda solo Tidal. Las dem&aacute;s apps siguen funcionando.</p>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px;">
+                <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Reanudar a las:</label>
+                <select class="timer-hour" data-app="tidal" data-action="start" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8" selected>8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+                </select>
+                <span style="color:#888;">:</span>
+                <input type="number" class="timer-min" data-app="tidal" data-action="start" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-ampm" data-app="tidal" data-action="start" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="AM">AM</option><option value="PM">PM</option>
+                </select>
+                <button class="boton-elegante timer-save-btn" data-app="tidal" data-action="start" style="padding: 10px 16px;">Guardar y Activar</button>
+                <button class="boton-elegante timer-cancel-btn" data-app="tidal" data-action="start" style="padding: 10px 16px; background: #e74c3c !important;">Desactivar</button>
+            </div>
+            <div class="timer-status" data-app="tidal" data-action="start" style="font-size: 13px; color: #aaa; margin-bottom: 12px;"></div>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px;">
+                <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Pausar a las:</label>
+                <select class="timer-hour" data-app="tidal" data-action="stop" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+                </select>
+                <span style="color:#888;">:</span>
+                <input type="number" class="timer-min" data-app="tidal" data-action="stop" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-ampm" data-app="tidal" data-action="stop" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="AM">AM</option><option value="PM" selected>PM</option>
+                </select>
+                <button class="boton-elegante timer-save-btn" data-app="tidal" data-action="stop" style="padding: 10px 16px;">Guardar y Activar</button>
+                <button class="boton-elegante timer-cancel-btn" data-app="tidal" data-action="stop" style="padding: 10px 16px; background: #e74c3c !important;">Desactivar</button>
+            </div>
+            <div class="timer-status" data-app="tidal" data-action="stop" style="font-size: 13px; color: #aaa;"></div>
+        </div>
+        <!-- APPLE MUSIC -->
+        <div class="card" style="margin-bottom: 20px; border-left: 3px solid #FC3C44;">
+            <h2 style="margin-bottom: 15px;">Apple Music</h2>
+            <p style="color: #aaa; font-size: 13px; margin-bottom: 15px;">Pausa/reanuda solo Apple Music. Las dem&aacute;s apps siguen funcionando.</p>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px;">
+                <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Reanudar a las:</label>
+                <select class="timer-hour" data-app="apple" data-action="start" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8" selected>8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+                </select>
+                <span style="color:#888;">:</span>
+                <input type="number" class="timer-min" data-app="apple" data-action="start" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-ampm" data-app="apple" data-action="start" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="AM">AM</option><option value="PM">PM</option>
+                </select>
+                <button class="boton-elegante timer-save-btn" data-app="apple" data-action="start" style="padding: 10px 16px;">Guardar y Activar</button>
+                <button class="boton-elegante timer-cancel-btn" data-app="apple" data-action="start" style="padding: 10px 16px; background: #e74c3c !important;">Desactivar</button>
+            </div>
+            <div class="timer-status" data-app="apple" data-action="start" style="font-size: 13px; color: #aaa; margin-bottom: 12px;"></div>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap; margin-bottom: 10px;">
+                <label style="color: #ccc; font-size: 14px; white-space: nowrap;">Pausar a las:</label>
+                <select class="timer-hour" data-app="apple" data-action="stop" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option>
+                </select>
+                <span style="color:#888;">:</span>
+                <input type="number" class="timer-min" data-app="apple" data-action="stop" min="0" max="59" value="00" style="width: 60px; padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                <select class="timer-ampm" data-app="apple" data-action="stop" style="padding: 10px; background: #1e1e2e; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; font-size: 14px;">
+                    <option value="AM">AM</option><option value="PM" selected>PM</option>
+                </select>
+                <button class="boton-elegante timer-save-btn" data-app="apple" data-action="stop" style="padding: 10px 16px;">Guardar y Activar</button>
+                <button class="boton-elegante timer-cancel-btn" data-app="apple" data-action="stop" style="padding: 10px 16px; background: #e74c3c !important;">Desactivar</button>
+            </div>
+            <div class="timer-status" data-app="apple" data-action="stop" style="font-size: 13px; color: #aaa;"></div>
         </div>
         <div class="card" style="margin-bottom: 20px;">
             <h2 style="margin-bottom: 15px;">Registro del Temporizador</h2>
