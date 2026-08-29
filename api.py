@@ -7953,11 +7953,18 @@ def install_update():
         ctx.verify_mode = ssl.CERT_NONE
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
         for fname in SOURCE_FILES_TO_UPDATE:
-            raw_url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{branch}/{fname}"
+            # Use the GitHub Contents API (no CDN cache) so we always get the newest file
+            raw_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{fname}?ref={branch}"
             dest = os.path.join(app_dir, fname)
             try:
-                resp = opener.open(raw_url, timeout=30)
-                data = resp.read()
+                req = urllib.request.Request(raw_url, headers={'User-Agent': 'Spotifix-Updater'})
+                resp = opener.open(req, timeout=30)
+                meta = json.loads(resp.read().decode())
+                if 'content' in meta:
+                    import base64
+                    data = base64.b64decode(meta['content'])
+                else:
+                    continue
                 with open(dest, 'wb') as f:
                     f.write(data)
                 downloaded.append(fname)
