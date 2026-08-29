@@ -4610,11 +4610,11 @@ def _count_apple_songs_from_link(link):
     return 10
 
 _APPLE_BANNER_TERMS = (
-    'music + friends', 'get started', 'empezar', 'obtén un mes gratis', 'obtener un mes gratis',
+    'music + friends', 'music & friends', 'get started', 'obtén un mes gratis', 'obtener un mes gratis',
     '¿ya estás suscrito?', 'ya estás suscrito', 'escucha y descarga toda la música',
-    'try it free', 'free trial', 'suscríbete', 'subscribe to apple music',
+    'try it free', 'free trial', 'suscríbete a apple music', 'subscribe to apple music',
     'welcome to apple music', 'bienvenido a apple music', 'start listening',
-    'empezar a escuchar', 'introducción', 'siguiente', 'continuar', 'continue'
+    'empezar a escuchar', 'disfruta de apple music', 'ola de bienvenida'
 )
 
 _DIALOG_NEG_TEXTS = (
@@ -4645,6 +4645,16 @@ def _dismiss_any_banner(d, udid, display_name='Apple Music'):
             is_banner = any(t in low for t in _APPLE_BANNER_TERMS)
 
             if not is_dialog and not is_banner:
+                return False
+
+            # Safety: only act when a music app or system dialog is in the foreground
+            is_music_fg = ('package="com.apple.android.music"' in low or
+                           'package="com.aspiro.tidal"' in low or
+                           'package="com.spotify.music"' in low)
+            is_system_fg = ('package="android"' in low or
+                            'package="com.android.systemui"' in low)
+            if not is_music_fg and not (is_dialog and is_system_fg):
+                add_log("WARN", udid, f"[{display_name}] Overlay detected but foreground is not a music app; skipping.")
                 return False
 
             # 1) Negative/cancel text buttons (safer): Ahora no, Not now, Cancelar...
