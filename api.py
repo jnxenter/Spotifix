@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import threading
 
 from httpcore import ProxyError
@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.0.3"
+Bot_version = "4.0.2"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -252,6 +252,9 @@ config_mute_napster_app = False
 config_use_clonned_apks = True
 config_use_simultaneously_automation_for_clones = True
 confog_amount_of_cloned_apks_to_run = 5
+config_validate_proxy = False
+
+proxy_blocked_devices = set()
 
 settings_capsolver_api_key = None
 
@@ -259,6 +262,32 @@ start_time = time.time()
 used_accounts = set()
 used_ports = set()
 stop_flags = {}
+
+
+def _stop_requested(udid):
+    if udid and (stop_flags.get(udid) or stop_flags.get(f"{udid}_multiapp")):
+        return True
+    if stop_flags.get('all'):
+        return True
+    return False
+
+
+def _reset_stop_flags():
+    """Clear every stop flag so a fresh /start_bot or timer start never sees a stale stop."""
+    stop_flags['all'] = False
+    for k in list(stop_flags.keys()):
+        stop_flags[k] = False
+
+
+def _request_bot_stop():
+    """Stop the whole bot cleanly from inside a worker thread (no os._exit, keeps API alive)."""
+    def _do_stop():
+        time.sleep(2)
+        try:
+            _stop_bot()
+        except Exception as e:
+            add_log("ERR.", "bot", f"[Stop] {e}")
+    threading.Thread(target=_do_stop, daemon=True).start()
 
 stream_data_queue = []
 stream_data_lock = threading.Lock()
@@ -1223,7 +1252,7 @@ def save_config():
 def save_tidal_links():
     data = request.json
     links_text = data.get('links', '')
-    tidal_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'TidalLinks.txt')
+    tidal_file = os.path.join(_bundle_app_dir(), 'TidalLinks.txt')
     with open(tidal_file, 'w') as f:
         f.write(links_text.strip())
     return jsonify({"message": "Tidal links saved", "count": len([l for l in links_text.strip().splitlines() if l.strip()])})
@@ -1231,7 +1260,7 @@ def save_tidal_links():
 @app.route('/get_tidal_links', methods=['GET'])
 @require_token
 def get_tidal_links():
-    tidal_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'TidalLinks.txt')
+    tidal_file = os.path.join(_bundle_app_dir(), 'TidalLinks.txt')
     if os.path.exists(tidal_file):
         with open(tidal_file, 'r') as f:
             return jsonify({"links": f.read()})
@@ -1242,7 +1271,7 @@ def get_tidal_links():
 def save_apple_links():
     data = request.json
     links_text = data.get('links', '')
-    apple_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'AppleLinks.txt')
+    apple_file = os.path.join(_bundle_app_dir(), 'AppleLinks.txt')
     with open(apple_file, 'w') as f:
         f.write(links_text.strip())
     return jsonify({"message": "Apple Music links saved", "count": len([l for l in links_text.strip().splitlines() if l.strip()])})
@@ -1250,7 +1279,7 @@ def save_apple_links():
 @app.route('/get_apple_links', methods=['GET'])
 @require_token
 def get_apple_links():
-    apple_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'AppleLinks.txt')
+    apple_file = os.path.join(_bundle_app_dir(), 'AppleLinks.txt')
     if os.path.exists(apple_file):
         with open(apple_file, 'r') as f:
             return jsonify({"links": f.read()})
@@ -1261,7 +1290,7 @@ def get_apple_links():
 def save_tidal_accounts():
     data = request.json
     accounts_text = data.get('accounts', '')
-    acc_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'TidalAccounts.txt')
+    acc_file = os.path.join(_bundle_app_dir(), 'TidalAccounts.txt')
     with open(acc_file, 'w') as f:
         f.write(accounts_text.strip())
     return jsonify({"message": "Tidal accounts saved", "count": len([l for l in accounts_text.strip().splitlines() if l.strip()])})
@@ -1269,7 +1298,7 @@ def save_tidal_accounts():
 @app.route('/get_tidal_accounts', methods=['GET'])
 @require_token
 def get_tidal_accounts():
-    acc_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'TidalAccounts.txt')
+    acc_file = os.path.join(_bundle_app_dir(), 'TidalAccounts.txt')
     if os.path.exists(acc_file):
         with open(acc_file, 'r') as f:
             return jsonify({"accounts": f.read()})
@@ -1280,7 +1309,7 @@ def get_tidal_accounts():
 def save_apple_accounts():
     data = request.json
     accounts_text = data.get('accounts', '')
-    acc_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'AppleAccounts.txt')
+    acc_file = os.path.join(_bundle_app_dir(), 'AppleAccounts.txt')
     with open(acc_file, 'w') as f:
         f.write(accounts_text.strip())
     return jsonify({"message": "Apple Music accounts saved", "count": len([l for l in accounts_text.strip().splitlines() if l.strip()])})
@@ -1288,7 +1317,7 @@ def save_apple_accounts():
 @app.route('/get_apple_accounts', methods=['GET'])
 @require_token
 def get_apple_accounts():
-    acc_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'AppleAccounts.txt')
+    acc_file = os.path.join(_bundle_app_dir(), 'AppleAccounts.txt')
     if os.path.exists(acc_file):
         with open(acc_file, 'r') as f:
             return jsonify({"accounts": f.read()})
@@ -1503,6 +1532,7 @@ def start_stop_bot():
             global config_search_links_perc
             global config_streaming_mode_only
             global config_use_clonned_apks
+            global config_validate_proxy
             global config_selected_apps
 
             config_streams_to_do = int(config_data.get('streams_to_do'))
@@ -1517,6 +1547,8 @@ def start_stop_bot():
             config_tidal_playtime = config_data.get('tidal_playtime', '') or ''
             config_apple_playtime = config_data.get('apple_playtime', '') or ''
             config_streaming_mode_only = config_data.get('streaming_mode_only')
+            config_validate_proxy = config_data.get('validate_proxy', False)
+            add_log("INFO", '', f"[Proxy] Config loaded: validate_proxy={config_validate_proxy}")
             config_links_batch_id = config_data.get('links_batch_id')
             config_tidal_links_batch_id = config_data.get('tidal_links_batch_id', '')
             config_apple_links_batch_id = config_data.get('apple_links_batch_id', '')
@@ -1571,6 +1603,7 @@ def start_stop_bot():
                 webhook_thread.start()
 
             worker_bot_running = True
+            _reset_stop_flags()
             bot_thread = threading.Thread(target=main_function, args=(config_data,))
             bot_thread.start()
 
@@ -1581,15 +1614,17 @@ def start_stop_bot():
 
     else:
         try:
-            for thread_number in list(worker_threads.keys()):
-                stop_flags[thread_number] = True
+            stop_flags['all'] = True
+            for udid in list(stop_flags.keys()):
+                stop_flags[udid] = True
 
             for thread_info in worker_threads.values():
                 thread = thread_info.get("thread")
                 if thread and thread.is_alive():
-                    thread.join(timeout=3)
+                    thread.join(timeout=45)
 
             worker_threads.clear()
+            _reset_stop_flags()
             worker_bot_running = False
 
             apps_to_close = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
@@ -2966,7 +3001,7 @@ def run_spotify_patch():
             exe_dir = os.path.dirname(os.path.abspath(sys.executable))
             base_dir = os.path.dirname(exe_dir) if os.path.basename(exe_dir) == 'api' else exe_dir
         else:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+            base_dir = _bundle_app_dir()
         tools_dir = os.path.join(base_dir, 'Tools')
         patcher_file = os.path.join(base_dir, 'SpotifyPatcher.py')
         add_log("INFO", "Spotifix", f"Fix screen iniciado. Tools: {tools_dir}")
@@ -4267,8 +4302,9 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
         global config_streams_to_do
         if config_streams_to_do == 0:
             add_log("FINAL", udid, "All Streams were made!")
-            sleep(5)
-            os._exit(0)
+            send_stream_data_to_consumer(datetime.now(), worker_streams_done, artistInfo, titleInfo, 0)
+            _request_bot_stop()
+            return False, 0, d
         else:
             config_streams_to_do -= 1
         ppa -= 1
@@ -4279,6 +4315,8 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
         songTime1 = _safe_get_text(d, udid, pkg, spotify_version, 'position', 'position_text', attempts=2, timeout=10)
         songTime2 = _safe_get_text(d, udid, pkg, spotify_version, 'duration', 'duration_text', attempts=2, timeout=10)
         d.implicitly_wait(10)
+
+        send_stream_data_to_consumer(datetime.now(), worker_streams_done, artistInfo, titleInfo, 0)
 
         if full_playtime_run is True:
             add_log("SUCC", udid,
@@ -4423,7 +4461,7 @@ def get_spotify_packages(d):
 
 def _get_tidal_links_file():
     """Return the path to the TidalLinks.txt file."""
-    base = os.path.dirname(os.path.abspath(__file__))
+    base = _bundle_app_dir()
     return os.path.join(base, 'TidalLinks.txt')
 
 def _get_random_tidal_link():
@@ -4546,7 +4584,7 @@ def _tidal_play_from_link(d, udid):
         return False
 
 def _get_apple_links_file():
-    base = os.path.dirname(os.path.abspath(__file__))
+    base = _bundle_app_dir()
     return os.path.join(base, 'AppleLinks.txt')
 
 def _get_random_apple_link():
@@ -4570,6 +4608,169 @@ def _count_apple_songs_from_link(link):
     elif '/playlist/' in link:
         return random.randint(15, 40)
     return 10
+
+_APPLE_BANNER_TERMS = (
+    'music + friends', 'get started', 'empezar', 'obtén un mes gratis', 'obtener un mes gratis',
+    '¿ya estás suscrito?', 'ya estás suscrito', 'escucha y descarga toda la música',
+    'try it free', 'free trial', 'suscríbete', 'subscribe to apple music',
+    'welcome to apple music', 'bienvenido a apple music', 'start listening',
+    'empezar a escuchar', 'introducción', 'siguiente', 'continuar', 'continue'
+)
+
+_DIALOG_NEG_TEXTS = (
+    'Ahora no', 'Not now', 'No, gracias', 'No gracias', 'Cancelar', 'Cancel',
+    'Más tarde', 'Later', 'Necesito más tiempo', 'Skip for now', 'Omitir',
+    'Cerrar', 'Close', 'Dismiss', 'Permitir una vez', 'Allow once'
+)
+_DIALOG_POS_TEXTS = (
+    'OK', 'Aceptar', 'Accept', 'Entendido', 'Got it', 'Entiendo', 'Allow',
+    'Permitir', 'Sí', 'Yes'
+)
+
+
+def _dismiss_any_banner(d, udid, display_name='Apple Music'):
+    """Close ANY overlay banner/dialog that pops up (Apple Music onboarding
+    'Music + Friends', subscription offers, system dialogs, crash dialogs...).
+    Returns True if something was closed."""
+    try:
+        for attempt in range(3):
+            xml = d.dump_hierarchy(False)
+            if not xml:
+                return False
+            low = xml.lower()
+
+            is_dialog = ('android:id/alerttitle' in low or
+                         'window-type="2"' in low or
+                         'android:id/button' in low)
+            is_banner = any(t in low for t in _APPLE_BANNER_TERMS)
+
+            if not is_dialog and not is_banner:
+                return False
+
+            # 1) Negative/cancel text buttons (safer): Ahora no, Not now, Cancelar...
+            clicked = False
+            for txt in _DIALOG_NEG_TEXTS:
+                el = d(text=txt) or d(textContains=txt)
+                if el.exists(timeout=1):
+                    el.click()
+                    clicked = True
+                    add_log("INFO", udid, f"[{display_name}] Tapped '{txt}' to close popup ({attempt+1})")
+                    break
+            if clicked:
+                _human_delay(0.8, 1.6)
+                continue
+
+            # 2) Android dialog button2/button3 (usually Cancel/No), then button1 only if it's neutral word
+            btn = d(resourceId='android:id/button2') or d(resourceId='android:id/button3')
+            if btn.exists(timeout=1):
+                btn.click()
+                add_log("INFO", udid, f"[{display_name}] Closed dialog via android:button2/3 ({attempt+1})")
+                _human_delay(0.8, 1.6)
+                continue
+            ok = d(resourceId='android:id/button1')
+            if ok.exists(timeout=1):
+                ok_txt = str(ok.info.get('text', '') or '').lower()
+                if ok_txt and any(p in ok_txt for p in ('ok', 'aceptar', 'accept', 'entendido', 'got it', 'allow', 'permitir')):
+                    ok.click()
+                    add_log("INFO", udid, f"[{display_name}] Closed dialog via android:button1 '{ok_txt}' ({attempt+1})")
+                    _human_delay(0.8, 1.6)
+                    continue
+
+            # 3) Close/X controls anywhere (compat): content-desc or resource-id
+            for pat in ('cerrar', 'close', 'dismiss', 'descarta', 'cancelar', 'cancel'):
+                el = d(descriptionContains=pat)
+                if el.exists(timeout=1):
+                    el.click()
+                    clicked = True
+                    add_log("INFO", udid, f"[{display_name}] Tapped close control '{pat}' ({attempt+1})")
+                    break
+                el2 = d(resourceIdContains=pat)
+                if el2.exists(timeout=1):
+                    el2.click()
+                    clicked = True
+                    add_log("INFO", udid, f"[{display_name}] Tapped close by id '{pat}' ({attempt+1})")
+                    break
+            if clicked:
+                _human_delay(0.8, 1.6)
+                continue
+
+            # 4) X button at the top-left corner of the overlay (clickable node)
+            for mm in re.finditer(r'<node([^>]*?)>', xml):
+                attrs = mm.group(1)
+                if 'clickable="true"' not in attrs:
+                    continue
+                bm = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', attrs)
+                if not bm:
+                    continue
+                x1, y1, x2, y2 = map(int, bm.groups())
+                if x1 < 380 and y1 < 400 and 20 < (x2 - x1) < 320 and 20 < (y2 - y1) < 320:
+                    d.click((x1 + x2) // 2, (y1 + y2) // 2)
+                    clicked = True
+                    add_log("INFO", udid, f"[{display_name}] Tapped top-left X on overlay ({attempt+1})")
+                    break
+            if clicked:
+                _human_delay(0.8, 1.6)
+                continue
+
+            # 5) Fallback: press back once (closes most modal dialogs/sheets)
+            d.press('back')
+            add_log("INFO", udid, f"[{display_name}] Pressed back to close overlay ({attempt+1})")
+            _human_delay(0.8, 1.6)
+
+        return True
+    except Exception as e:
+        add_log("ERR.", udid, f"[{display_name}] Banner dismiss failed: {e}")
+        return False
+
+
+_banner_watcher_registry = {}
+
+
+def _banner_watcher_loop(udid):
+    """Daemon thread: continuously watches the device screen and dismisses ANY
+    popup/banner/dialog that appears, even minutes into the session."""
+    add_log("INFO", udid, "[BannerWatcher] Watching screen for popups...")
+    while True:
+        try:
+            if not worker_bot_running:
+                break
+            if stop_flags.get(udid) or stop_flags.get('all') or stop_flags.get(f"{udid}_multiapp"):
+                break
+            time.sleep(random.uniform(6, 11))
+            if not worker_bot_running:
+                break
+            if stop_flags.get(udid) or stop_flags.get('all') or stop_flags.get(f"{udid}_multiapp"):
+                break
+            ui_lock = _get_device_ui_lock(udid)
+            if not ui_lock.acquire(timeout=6):
+                continue
+            try:
+                d = ua.connect(udid)
+                if _dismiss_any_banner(d, udid):
+                    add_log("INFO", udid, "[BannerWatcher] Popup dismissed, continuing playback")
+                    _human_delay(1.0, 2.0)
+            except Exception:
+                pass
+            finally:
+                try:
+                    ui_lock.release()
+                except Exception:
+                    pass
+        except Exception:
+            time.sleep(10)
+
+
+def _start_banner_watcher(udid):
+    """Start the banner watcher daemon for a device (idempotent)."""
+    try:
+        if _banner_watcher_registry.get(udid) and _banner_watcher_registry[udid].is_alive():
+            return
+        t = threading.Thread(target=_banner_watcher_loop, args=(udid,), daemon=True)
+        _banner_watcher_registry[udid] = t
+        t.start()
+    except Exception as e:
+        add_log("ERR.", udid, f"[BannerWatcher] start failed: {e}")
+
 
 def _apple_open_link(d, udid, link):
     try:
@@ -4704,6 +4905,22 @@ def _app_generic_play_song(d, udid, pkg, display_name, ppa, songs_num):
             sleep(finalplaytime)
 
         global worker_streams_done, worker_streams_done_spotify, worker_streams_done_tidal, worker_streams_done_apple, config_streams_to_do
+
+        _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+        if _np_state != 'PLAYING':
+            time.sleep(8)
+            _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+        if _np_state != 'PLAYING':
+            try:
+                _dismiss_any_banner(d, udid, display_name)
+                time.sleep(4)
+                _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+            except Exception:
+                pass
+        if _np_state != 'PLAYING':
+            add_log("WARN", udid, f"[{display_name}] Not PLAYING ({_np_state}) after wait; skipping stream without counting.")
+            return True, ppa, d
+
         worker_streams_done += 1
         if 'spotify' in display_name.lower():
             worker_streams_done_spotify += 1
@@ -4713,12 +4930,14 @@ def _app_generic_play_song(d, udid, pkg, display_name, ppa, songs_num):
             worker_streams_done_apple += 1
         if config_streams_to_do == 0:
             add_log("FINAL", udid, f"[{display_name}] All Streams were made!")
-            sleep(5)
-            os._exit(0)
+            send_stream_data_to_consumer(datetime.now(), worker_streams_done, _np_artist, _np_title, 0)
+            _request_bot_stop()
+            return False, 0, d
         else:
             config_streams_to_do -= 1
         ppa -= 1
 
+        send_stream_data_to_consumer(datetime.now(), worker_streams_done, _np_artist, _np_title, 0)
         update_thread_status(udid, f'[{display_name}] Stream done', None, False, True, False, False, False, None)
         add_log("SUCC", udid, f"[{display_name}] Stream done | PPA left: {ppa}")
 
@@ -4988,6 +5207,8 @@ def _get_now_playing(udid, pkg):
 
 
 def _open_spotify_human(d, udid, link, artist_name, album_name, pkg='com.spotify.music', link_type=None):
+    if _stop_requested(udid):
+        return False
     """Open Spotify and navigate to a link like a human: launch, dismiss dialogs,
     go to Search tab, type artist+album, select result, play."""
     spotify_version = get_device_spotify_version(udid, pkg)
@@ -5167,6 +5388,8 @@ def _open_spotify_human(d, udid, link, artist_name, album_name, pkg='com.spotify
 
 
 def _open_tidal_human(d, udid, link, artist_name=None, album_name=None):
+    if _stop_requested(udid):
+        return False
     """Open Tidal, go to search tab, type artist+album, select result, play. All human-like."""
     _adb_go_home(udid)
     _human_delay(1.0, 2.0)
@@ -5364,6 +5587,8 @@ def _open_tidal_human(d, udid, link, artist_name=None, album_name=None):
 
 
 def _open_apple_human(d, udid, link, artist_name=None, album_name=None):
+    if _stop_requested(udid):
+        return False
     """Open Apple Music via deep link intent, find and tap play. All human-like."""
     _adb_go_home(udid)
     _human_delay(0.5, 1.0)
@@ -5374,6 +5599,9 @@ def _open_apple_human(d, udid, link, artist_name=None, album_name=None):
     _adb_shell(udid, f'am start -a android.intent.action.VIEW -d "{link}" com.apple.android.music')
     _human_delay(5.0, 7.0)
     ensure_screen_on(d)
+
+    _dismiss_any_banner(d, udid, 'Apple Music')
+    _human_delay(0.5, 1.2)
 
     # For albums/playlists, scroll down a bit to show track listing
     if link_type in ('Album', 'Playlist'):
@@ -5534,6 +5762,480 @@ def _enable_multi_audio_focus(udid):
         return False
 
 
+SUPER_PROXY_PKG = 'com.scheler.superproxy'
+SUPER_PROXY_ACTIVITY = 'com.scheler.superproxy/.activity.MainActivity'
+
+
+def _send_proxy_alert(udid, proxy, message):
+    add_log("ERR.", udid, f"[ProxyAlert] {message}")
+    try:
+        if not config_webhook_url:
+            return
+        embed = {
+            "content": "",
+            "username": "Spotifix - Proxy Alert",
+            "embeds": [{
+                "title": "Proxy Alert",
+                "description": f"**Device:** {udid}\n**Proxy:** {proxy or 'N/A'}\n**Message:** {message}",
+                "color": 16711680,
+                "footer": {"text": "Spotifix Proxy Monitor"}
+            }]
+        }
+        requests.post(config_webhook_url, json=embed, timeout=10)
+    except:
+        pass
+
+
+def _is_vpn_active(udid):
+    try:
+        result = subprocess.run(
+            [adb_path, '-s', udid, 'shell', 'dumpsys', 'vpn'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, startupinfo=startupinfo
+        )
+        output = result.stdout.lower()
+        if 'com.scheler.superproxy' in output and ('connected' in output or 'established' in output):
+            return True
+        if 'active vpn' in output and 'com.scheler.superproxy' in output:
+            return True
+        return False
+    except:
+        return False
+
+
+def _open_super_proxy(udid):
+    try:
+        subprocess.run(
+            [adb_path, '-s', udid, 'shell', 'am', 'start', '-n', SUPER_PROXY_ACTIVITY],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, startupinfo=startupinfo
+        )
+        time.sleep(4)
+        return True
+    except:
+        return False
+
+
+def _dump_super_proxy_ui(udid):
+    for _ in range(3):
+        try:
+            subprocess.run(
+                [adb_path, '-s', udid, 'shell', 'uiautomator', 'dump', '/data/local/tmp/_sp.xml'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, startupinfo=startupinfo
+            )
+            result = subprocess.run(
+                [adb_path, '-s', udid, 'shell', 'cat', '/data/local/tmp/_sp.xml'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, startupinfo=startupinfo
+            )
+            if result.stdout and '<hierarchy' in result.stdout:
+                return result.stdout
+            time.sleep(2)
+        except:
+            time.sleep(2)
+    return None
+
+
+def _find_ui_button(xml, keywords, click_only=True):
+    import re
+    for kw in keywords:
+        pattern = re.compile(
+            rf'content-desc="[^"]*{re.escape(kw)}[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            re.IGNORECASE)
+        m = pattern.search(xml)
+        if m:
+            x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            return (x1 + x2) // 2, (y1 + y2) // 2
+        pattern = re.compile(
+            rf'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"[^>]*content-desc="[^"]*{re.escape(kw)}[^"]*"',
+            re.IGNORECASE)
+        m = pattern.search(xml)
+        if m:
+            x1, y1, x2, y2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+            return (x1 + x2) // 2, (y1 + y2) // 2
+    return None
+
+
+def _find_ui_text(xml, keywords, exclude=None):
+    import re
+    exclude = exclude or []
+    best = None
+    for kw in keywords:
+        pattern = re.compile(
+            rf'content-desc="([^"]*{re.escape(kw)}[^"]*)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+            re.IGNORECASE)
+        for m in pattern.finditer(xml):
+            desc = m.group(1)
+            if any(ex in desc for ex in exclude):
+                continue
+            x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            if best is None or y1 < best[1]:
+                best = (cx, cy, y1)
+    return (best[0], best[1]) if best else None
+
+
+def _decode_screenshot(udid):
+    try:
+        result = subprocess.run(
+            [adb_path, '-s', udid, 'exec-out', 'screencap', '-p'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15, startupinfo=startupinfo
+        )
+        png = result.stdout
+        if not png or png[:8] != b'\x89PNG\r\n\x1a\n':
+            return None
+        import zlib, struct
+        pos, width, height = 8, None, None
+        idat = b''
+        bpp = 4
+        while pos < len(png):
+            length = struct.unpack('>I', png[pos:pos+4])[0]
+            ctype = png[pos+4:pos+8]
+            chunk = png[pos+8:pos+8+length]
+            if ctype == b'IHDR':
+                width = struct.unpack('>I', chunk[:4])[0]
+                height = struct.unpack('>I', chunk[4:8])[0]
+                color_type = chunk[9]
+                bpp = 4 if color_type == 6 else 3
+            elif ctype == b'IDAT':
+                idat += chunk
+            pos += 12 + length
+        raw = zlib.decompress(idat)
+        stride = width * bpp
+        out = bytearray()
+        prev = bytearray(stride)
+        p = 0
+        for y in range(height):
+            f = raw[p]; p += 1
+            line = bytearray(raw[p:p+stride]); p += stride
+            if f == 1:
+                for i in range(bpp, stride):
+                    line[i] = (line[i] + line[i-bpp]) & 255
+            elif f == 2:
+                for i in range(stride):
+                    line[i] = (line[i] + prev[i]) & 255
+            elif f == 3:
+                for i in range(stride):
+                    a = line[i-bpp] if i >= bpp else 0
+                    line[i] = (line[i] + ((a + prev[i]) >> 1)) & 255
+            elif f == 4:
+                for i in range(stride):
+                    a = line[i-bpp] if i >= bpp else 0
+                    b = prev[i]
+                    c = prev[i-bpp] if i >= bpp else 0
+                    pa, pb, pc = abs(b-c), abs(a-c), abs(a+b-2*c)
+                    pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                    line[i] = (line[i] + pr) & 255
+            out += line
+            prev = line
+        return width, height, bpp, bytes(out)
+    except:
+        return None
+
+
+def _is_super_proxy_foreground(udid):
+    try:
+        result = subprocess.run(
+            [adb_path, '-s', udid, 'shell', 'dumpsys', 'window'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, startupinfo=startupinfo
+        )
+        focus = ''
+        for line in result.stdout.split('\n'):
+            if 'mCurrentFocus' in line:
+                focus = line
+                break
+        return SUPER_PROXY_PKG in focus
+    except:
+        return False
+
+
+def _screenshot_button_color(udid):
+    dec = _decode_screenshot(udid)
+    if not dec:
+        return None, None
+    width, height, bpp, out = dec
+    try:
+        stride = width * bpp
+        y_top = int(height * 0.70)
+        y_bot = int(height * 0.95)
+        green_pts = []
+        red_pts = []
+        for y in range(y_top, y_bot, 4):
+            for x in range(0, width, 4):
+                i = y*stride + x*bpp
+                r, g, bl = out[i], out[i+1], out[i+2]
+                if g > 130 and g > r + 40 and g > bl + 40:
+                    green_pts.append((x, y))
+                elif r > 150 and r > g + 60 and r > bl + 40:
+                    red_pts.append((x, y))
+
+        for pts, color in ((green_pts, 'green'), (red_pts, 'red')):
+            if len(pts) < 400:
+                continue
+            xs = [pt[0] for pt in pts]
+            ys = [pt[1] for pt in pts]
+            bw = max(xs) - min(xs)
+            bh = max(ys) - min(ys)
+            if bw < 500 or bh < 60:
+                continue
+            cx = (min(xs) + max(xs)) // 2
+            cy = (min(ys) + max(ys)) // 2
+            return color, (cx, cy)
+        return None, None
+    except:
+        return None, None
+
+
+def _find_proxy_card_pos(udid):
+    dec = _decode_screenshot(udid)
+    if not dec:
+        return None
+    width, height, bpp, out = dec
+    try:
+        stride = width * bpp
+        step = 4
+        y0 = int(height * 0.08)
+        y1 = int(height * 0.5)
+        runs = []
+        in_run = False
+        run_start = 0
+        for y in range(y0, y1, step):
+            white = 0
+            total = 0
+            for x in range(0, width, step):
+                i = y*stride + x*bpp
+                r, g, bl = out[i], out[i+1], out[i+2]
+                total += 1
+                if r > 200 and g > 200 and bl > 200:
+                    white += 1
+            ratio = (white / total) if total else 0
+            if ratio > 0.55:
+                if not in_run:
+                    in_run = True
+                    run_start = y
+            else:
+                if in_run:
+                    in_run = False
+                    if (y - step) - run_start >= 40:
+                        runs.append((run_start, y - step))
+                    run_start = 0
+        if in_run and run_start:
+            if (height // 2) - run_start >= 40:
+                runs.append((run_start, height // 2))
+        if not runs:
+            return None
+        top_start = runs[0][0]
+        top_end = runs[0][1]
+        cy = (top_start + top_end) // 2
+        return (width // 2, cy)
+    except:
+        return None
+
+
+def _is_super_proxy_list_view(udid):
+    """True si la pantalla de Super Proxy está en la vista de inicio/lista
+    (muestra la tarjeta del proxy y tabs, NO el botón grande Start/Stop verde/rojo)."""
+    try:
+        if _is_super_proxy_foreground(udid):
+            color, pos = _screenshot_button_color(udid)
+            if color:
+                return False
+            if _find_proxy_card_pos(udid):
+                return True
+    except:
+        pass
+    xml = _dump_super_proxy_ui(udid)
+    if xml:
+        has_tabs = any(
+            ('Proxies' in xml and 'Tab 1 of' in xml) or
+            ('Logging' in xml and 'Tab 2 of' in xml) or
+            ('Settings' in xml and 'Tab 3 of' in xml)
+        )
+        has_button = bool(_find_ui_button(xml, ['Start', 'Connect', 'Stop', 'Running', 'Disconnect']))
+        if has_button:
+            return False
+        if has_tabs:
+            return True
+    return False
+
+
+def _ensure_super_proxy_detail(udid):
+    """Si está en la vista de inicio/lista, toca la tarjeta del proxy para entrar al detalle.
+    Devuelve True si logró llegar a una vista con botón o si nunca estuvo en lista."""
+    if not _is_super_proxy_list_view(udid):
+        return True
+    card = _find_proxy_card_pos(udid)
+    if card:
+        subprocess.run(
+            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(card[0]), str(card[1])],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+        )
+        add_log("INFO", udid, f"[Proxy] In Super Proxy home/list view. Tapped proxy card at {card} to open detail...")
+        time.sleep(3)
+        return True
+    return False
+
+
+def _check_super_proxy_ui(udid):
+    if _is_super_proxy_foreground(udid):
+        color, pos = _screenshot_button_color(udid)
+        if color == 'green':
+            return False
+        if color == 'red':
+            return True
+        if not color:
+            return False
+    xml = _dump_super_proxy_ui(udid)
+    if xml and _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
+        return True
+    if xml and (_find_ui_button(xml, ['Start', 'Connect'])):
+        return False
+    return False
+
+
+def _tap_super_proxy_start(udid):
+    _ensure_super_proxy_detail(udid)
+    color, pos = _screenshot_button_color(udid)
+    if color == 'green' and pos:
+        subprocess.run(
+            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(pos[0]), str(pos[1])],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+        )
+        return True
+    if color == 'red' and pos:
+        return True
+
+    card = _find_proxy_card_pos(udid)
+    if card:
+        subprocess.run(
+            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(card[0]), str(card[1])],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+        )
+        time.sleep(3)
+        color, pos = _screenshot_button_color(udid)
+        if color == 'green' and pos:
+            subprocess.run(
+                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(pos[0]), str(pos[1])],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+            )
+            return True
+        if color == 'red' and pos:
+            return True
+
+    xml = _dump_super_proxy_ui(udid)
+    if xml:
+        target = _find_ui_button(xml, ['Start', 'Connect'])
+        if not target:
+            proxy_card = _find_ui_text(xml, ['Proxy'], exclude=['Super Proxy', 'Add proxy', 'Proxies'])
+            if proxy_card:
+                subprocess.run(
+                    [adb_path, '-s', udid, 'shell', 'input', 'tap', str(proxy_card[0]), str(proxy_card[1])],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+                )
+                time.sleep(3)
+                color, pos = _screenshot_button_color(udid)
+                if color == 'green' and pos:
+                    subprocess.run(
+                        [adb_path, '-s', udid, 'shell', 'input', 'tap', str(pos[0]), str(pos[1])],
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+                    )
+                    return True
+                if color == 'red' and pos:
+                    return True
+                xml = _dump_super_proxy_ui(udid)
+                if xml:
+                    target = _find_ui_button(xml, ['Start', 'Connect'])
+        if target:
+            subprocess.run(
+                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(target[0]), str(target[1])],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+            )
+            return True
+    return False
+
+
+def _validate_device_proxy(udid, proxy, connection_type):
+    if not config_validate_proxy:
+        add_log("WARN", udid, "[Proxy] validate_proxy is DISABLED in config. Skipping validation.")
+        return True
+    add_log("INFO", udid, "[Proxy] Opening Super Proxy to validate 4x before apps (config_validate_proxy=True)...")
+
+    connected_rounds = 0
+    for vround in range(1, 5):
+        if _stop_requested(udid):
+            add_log("WARN", udid, "[Proxy] Stop requested during proxy validation.")
+            return False
+        _open_super_proxy(udid)
+        time.sleep(1)
+        if _check_super_proxy_ui(udid):
+            connected_rounds += 1
+            add_log("SUCC", udid, f"[Proxy] VALIDATION {vround}/4: CONNECTED ({connected_rounds}/4 rounds ok)")
+            time.sleep(2)
+            continue
+        add_log("WARN", udid, f"[Proxy] VALIDATION {vround}/4: NOT connected, attempting to start...")
+        rectified = False
+        for attempt in range(1, 6):
+            if _stop_requested(udid):
+                return False
+            _open_super_proxy(udid)
+            time.sleep(1)
+            _tap_super_proxy_start(udid)
+            time.sleep(5)
+            if _check_super_proxy_ui(udid):
+                connected_rounds += 1
+                add_log("SUCC", udid, f"[Proxy] RECTIFIED on attempt {attempt} (round {vround}/4, {connected_rounds}/4 rounds ok)")
+                rectified = True
+                time.sleep(2)
+                break
+            add_log("WARN", udid, f"[Proxy] Rectify attempt {attempt}/5 (round {vround}/4) failed, retrying...")
+            time.sleep(2)
+        if not rectified:
+            msg = f"Super Proxy FAILED the {vround}/4 validation round (could NOT connect within 5 attempts) on device {udid}. Device will be skipped."
+            _send_proxy_alert(udid, proxy, msg)
+            proxy_blocked_devices.add(udid)
+            add_log("ERR.", udid, "[Proxy] Validation failed. Skipping device.")
+            return False
+
+    if connected_rounds >= 4:
+        add_log("SUCC", udid, f"[Proxy] Validated CONNECTED in {connected_rounds}/4 rounds. Proceeding to launch apps.")
+        return True
+    add_log("ERR.", udid, f"[Proxy] Only {connected_rounds}/4 rounds connected. Failing validation.")
+    proxy_blocked_devices.add(udid)
+    return False
+
+
+def _recheck_device_proxy(udid, proxy, connection_type):
+    if not config_validate_proxy:
+        return True
+    for rcheck_round in range(1, 3):
+        if _check_super_proxy_ui(udid):
+            add_log("SUCC", udid, f"[Proxy] RECHECK {rcheck_round}/2: CONNECTED")
+            return True
+        add_log("WARN", udid, f"[Proxy] RECHECK {rcheck_round}/2: NOT connected, attempting to start...")
+        rectified = False
+        for attempt in range(1, 6):
+            _open_super_proxy(udid)
+            time.sleep(1)
+            _tap_super_proxy_start(udid)
+            time.sleep(5)
+            if _check_super_proxy_ui(udid):
+                add_log("SUCC", udid, f"[Proxy] RECHECK reconnected on attempt {attempt} (round {rcheck_round}/2)")
+                rectified = True
+                break
+            add_log("WARN", udid, f"[Proxy] Recheck attempt {attempt}/5 (round {rcheck_round}/2) failed, retrying...")
+            time.sleep(2)
+        if rectified:
+            return True
+    msg = f"Super Proxy DISCONNECTED and failed to reconnect after 2 rounds (5 attempts each) on device {udid}. Device stopped."
+    _send_proxy_alert(udid, proxy, msg)
+    proxy_blocked_devices.add(udid)
+    apps_to_close = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
+    for pkg in apps_to_close:
+        try:
+            subprocess.run([adb_path, '-s', udid, 'shell', 'am', 'force-stop', pkg],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+        except:
+            pass
+    return False
+
+
 def _multi_app_start_all(selected_apps_keys, udid, binded_account, binded_proxy, connection_type, account_type):
     """Launch all selected apps in RANDOM order with human-like behavior.
     Each app: go home -> open like a human -> play from its specific link type.
@@ -5555,6 +6257,9 @@ def _multi_app_start_all(selected_apps_keys, udid, binded_account, binded_proxy,
     for app_key in shuffled_apps:
         if stop_flags.get(f"{udid}_{app_key}") or stop_flags.get(udid):
             break
+        if app_key in worker_app_paused:
+            add_log("INFO", udid, f"[MultiApp] {SUPPORTED_APPS[app_key]['display_name']} is paused (timer), skipping launch")
+            continue
 
         app_info = SUPPORTED_APPS.get(app_key)
         if not app_info:
@@ -5750,7 +6455,7 @@ def _multi_app_try_like_follow(d, udid, app_key, pkg, display_name):
         pass
 
 
-def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
+def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binded_proxy=None, connection_type=None):
     """Fully randomized multi-app monitor. Both apps play simultaneously.
     Tracks per-link song counts based on link type (album/track/playlist).
     Everything is varied: timing, order, actions. No fixed patterns."""
@@ -5772,7 +6477,7 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
         initial_songs = random.randint(8, 25)
         app_relink_counters[app_key] = initial_songs
         app_total_songs_in_link[app_key] = initial_songs
-        app_next_action_time[app_key] = time.time() + random.uniform(30, 120)
+        app_next_action_time[app_key] = time.time() + random.uniform(15, 35)
         app_link_types[app_key] = 'Unknown'
 
     link_info = getattr(_multi_app_relink_app, '_link_info', {})
@@ -5787,6 +6492,8 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
 
     last_health_check = time.time()
     health_interval = random.uniform(15, 30)
+    last_proxy_check_time = time.time()
+    proxy_check_interval = random.uniform(6 * 3600, 8 * 3600)
     app_last_good_time = {}
     app_consecutive_bad = {}
     app_forcestop_count = {}
@@ -5796,6 +6503,9 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
         app_consecutive_bad[app_key] = 0
         app_forcestop_count[app_key] = 0
         app_last_forcestop_time[app_key] = 0
+    app_last_paused_kill = {}
+    for app_key in selected_apps_keys:
+        app_last_paused_kill[app_key] = 0
 
     while (time.time() - session_start) < session_time_seconds:
         if stop_flags.get(udid) or stop_flags.get(f"{udid}_multiapp"):
@@ -5807,6 +6517,11 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
             if stop_flags.get(udid) or stop_flags.get(f"{udid}_multiapp"):
                 break
             if stop_flags.get(f"{udid}_{app_key}"):
+                continue
+            if app_key in worker_app_paused:
+                if now - app_last_paused_kill.get(app_key, 0) >= 15:
+                    _force_close_app_pkgs(udid, app_key)
+                    app_last_paused_kill[app_key] = now
                 continue
 
             app_info = SUPPORTED_APPS.get(app_key)
@@ -5825,7 +6540,25 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
             if elapsed >= actual_playtime and now >= app_next_action_time.get(app_key, 0):
                 if app_key not in link_info:
                     app_timers[app_key] = now
-                    app_next_action_time[app_key] = now + random.uniform(30, 120)
+                    app_next_action_time[app_key] = now + random.uniform(15, 35)
+                    continue
+                _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+                if _np_state != 'PLAYING':
+                    try:
+                        ui_lock = _get_device_ui_lock(udid)
+                        ui_lock.acquire()
+                        try:
+                            _dismiss_any_banner(ua.connect(udid), udid, display_name)
+                        finally:
+                            ui_lock.release()
+                        time.sleep(4)
+                        _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+                    except Exception:
+                        pass
+                if _np_state != 'PLAYING':
+                    add_log("WARN", udid, f"[MultiApp] [{display_name}] Not PLAYING ({_np_state}) at end of playtime; not counting stream.")
+                    app_timers[app_key] = now
+                    app_next_action_time[app_key] = now + random.uniform(15, 35)
                     continue
                 worker_streams_done += 1
                 if app_key == 'spotify':
@@ -5840,8 +6573,17 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
                 app_timers[app_key] = now
                 app_relink_counters[app_key] = app_relink_counters.get(app_key, 15) - 1
 
+                send_stream_data_to_consumer(datetime.now(), worker_streams_done, _np_artist, _np_title, 0)
                 update_thread_status(udid, f'[MultiApp] {display_name} streaming', None, False, True, False, False, False, None)
                 add_log("SUCC", udid, f"[MultiApp] [{display_name}] Stream #{app_stream_counts[app_key]} done | Link: {app_link_types.get(app_key, '?')} | Left in link: {app_relink_counters[app_key]}")
+
+                if config_streams_to_do == 0:
+                    add_log("FINAL", udid, f"[MultiApp] [{display_name}] All Streams were made!")
+                    stop_flags[udid] = True
+                    stop_flags[f"{udid}_multiapp"] = True
+                    stop_flags['all'] = True
+                    _request_bot_stop()
+                    return
 
                 if app_relink_counters[app_key] <= 0:
                     add_log("INFO", udid, f"[MultiApp] [{display_name}] Reloading (was {app_link_types.get(app_key, '?')} with {app_total_songs_in_link[app_key]} songs)...")
@@ -5862,7 +6604,7 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
                 else:
                     _multi_app_next_song(udid, app_key, pkg, display_name)
 
-                app_next_action_time[app_key] = now + random.uniform(30, 120)
+                app_next_action_time[app_key] = now + random.uniform(15, 35)
 
                 if random.random() < 0.2:
                     ui_lock = _get_device_ui_lock(udid)
@@ -5887,6 +6629,9 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
             health_interval = random.uniform(15, 30)
             status_parts = []
             for app_key in selected_apps_keys:
+                if app_key in worker_app_paused:
+                    status_parts.append(f"{SUPPORTED_APPS[app_key]['display_name']}: PAUSED (timer)")
+                    continue
                 pkg = SUPPORTED_APPS[app_key]['package']
                 dn = SUPPORTED_APPS[app_key]['display_name']
                 state, title, artist = _get_now_playing(udid, pkg)
@@ -6041,8 +6786,35 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds):
                 add_log("INFO", udid, f"[MultiApp] HEALTH: {' | '.join(status_parts)}")
             update_thread_status(udid, f'[MultiApp] Health OK', None, False, False, False, False, False, None)
 
+        if config_validate_proxy and (time.time() - last_proxy_check_time) >= proxy_check_interval:
+            last_proxy_check_time = time.time()
+            add_log("INFO", udid, "[Proxy] Periodic proxy check...")
+            if not _recheck_device_proxy(udid, binded_proxy, connection_type):
+                add_log("ERR.", udid, "[Proxy] Periodic check failed. Device blocked.")
+                break
+            else:
+                add_log("SUCC", udid, "[Proxy] Periodic check passed. VPN is active.")
+                if udid in proxy_blocked_devices:
+                    proxy_blocked_devices.discard(udid)
+                apps_to_restart = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
+                restarted_any = False
+                for pkg in apps_to_restart:
+                    try:
+                        r = subprocess.run([adb_path, '-s', udid, 'shell', 'pidof', pkg],
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=5, startupinfo=startupinfo)
+                        if r.stdout.strip():
+                            subprocess.run([adb_path, '-s', udid, 'shell', 'am', 'force-stop', pkg],
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+                            restarted_any = True
+                    except:
+                        pass
+                if restarted_any:
+                    add_log("INFO", udid, "[Proxy] Apps restarted to use active proxy. Health check will relaunch them.")
+
     add_log("INFO", udid, "[MultiApp] Session time ended, stopping all apps...")
     for app_key in selected_apps_keys:
+        if app_key in worker_app_paused:
+            continue
         app_info = SUPPORTED_APPS.get(app_key)
         if app_info:
             _stop_app_via_adb(udid, app_info['package'])
@@ -6338,6 +7110,7 @@ def main_function(config_data):
         except:
             pass
 
+        _start_banner_watcher(udid)
         device_apps = device_app_overrides.get(udid, selected_apps)
         add_log("INFO", udid, f"[MultiApp] App selection for {udid}: {device_apps}")
 
@@ -6363,10 +7136,23 @@ def main_function(config_data):
                 while True:
                     if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
                         break
+                    if udid in proxy_blocked_devices:
+                        add_log("WARN", udid, "[Proxy] Device blocked due to proxy failure. Waiting for restart...")
+                        time.sleep(30)
+                        continue
                     try:
+                        if not _validate_device_proxy(udid, binded_proxy, conn_type):
+                            add_log("ERR.", udid, "[Proxy] Proxy validation failed. Skipping device.")
+                            break
+                        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                            break
                         _multi_app_start_all(apps, udid, binded_account, binded_proxy, conn_type, acc_type)
-                        _multi_app_monitor_all(apps, udid, session_sec)
+                        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                            break
+                        _multi_app_monitor_all(apps, udid, session_sec, binded_proxy, conn_type)
                         for app_key in apps:
+                            if app_key in worker_app_paused:
+                                continue
                             pkg = SUPPORTED_APPS[app_key]['package']
                             _stop_app_via_adb(udid, pkg)
                         add_log("INFO", udid, "[MultiApp] Session ended, restarting cycle...")
@@ -6468,19 +7254,19 @@ def get_installed_apps_endpoint():
 
 
 INSTALL_APKS = {
-    'spotify': os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'Spotify_9.1.22.apk'),
+    'spotify': os.path.join(_bundle_app_dir(), 'apk', 'Spotify_9.1.22.apk'),
     'tidal': {
-        'base': os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'Tidal_base.apk'),
+        'base': os.path.join(_bundle_app_dir(), 'apk', 'Tidal_base.apk'),
         'splits': [
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'Tidal_arm64.apk'),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'Tidal_xxhdpi.apk'),
+            os.path.join(_bundle_app_dir(), 'apk', 'Tidal_arm64.apk'),
+            os.path.join(_bundle_app_dir(), 'apk', 'Tidal_xxhdpi.apk'),
         ]
     },
     'apple_music': {
-        'base': os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'AppleMusic_base.apk'),
+        'base': os.path.join(_bundle_app_dir(), 'apk', 'AppleMusic_base.apk'),
         'splits': [
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'AppleMusic_split_config.arm64_v8a.apk'),
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), 'apk', 'AppleMusic_split_config.xxhdpi.apk'),
+            os.path.join(_bundle_app_dir(), 'apk', 'AppleMusic_split_config.arm64_v8a.apk'),
+            os.path.join(_bundle_app_dir(), 'apk', 'AppleMusic_split_config.xxhdpi.apk'),
         ]
     }
 }
@@ -6680,21 +7466,108 @@ def backend_ready():
         return jsonify({"ready": True, "message": "Ready to launch!"})
 
 
-_timer_state = {
-    "enabled": False,
-    "timezone": "America/Mexico_City",
-    "stop_hour": 22,
-    "stop_minute": 0,
-    "triggered": False,
-    "log": []
-}
+_timer_log_entries = []
+_per_app_timers = {}
+for _ak in ['all', 'spotify', 'tidal', 'apple']:
+    _per_app_timers[_ak] = {
+        "stop_enabled": False, "stop_hour": 22, "stop_minute": 0, "stop_triggered": False,
+        "start_enabled": False, "start_hour": 8, "start_minute": 0, "start_triggered": False,
+    }
+_per_app_timers["all"]["timezone"] = "America/Mexico_City"
+worker_app_paused = set()
 
-_timer_start_state = {
-    "enabled": False,
-    "start_hour": 8,
-    "start_minute": 0,
-    "triggered": False
-}
+
+def _timer_log(msg):
+    ts = datetime.now().strftime("%H:%M:%S")
+    _timer_log_entries.append({"time": ts, "msg": msg})
+    if len(_timer_log_entries) > 100:
+        _timer_log_entries.pop(0)
+    add_log("INFO", "timer", msg)
+
+
+def _installed_pkgs_for_app(udid, app_key):
+    """Return every installed package matching an app (base + clones/patched)."""
+    patterns = {
+        'spotify': 'com.spotify',
+        'tidal': 'com.aspiro',
+        'apple_music': 'com.apple.android.music',
+    }
+    pat = patterns.get(app_key)
+    if not pat:
+        return []
+    out = _adb_shell(udid, 'pm list packages')
+    pkgs = []
+    if out:
+        for line in out.splitlines():
+            line = line.strip().replace('package:', '')
+            if pat in line:
+                pkgs.append(line)
+    if not pkgs and app_key in SUPPORTED_APPS:
+        pkgs = [SUPPORTED_APPS[app_key]['package']]
+    return pkgs
+
+
+def _force_close_app_pkgs(udid, app_key):
+    """Force-stop ALL packages of an app on a device (base + clones). Keeps login."""
+    pkgs = _installed_pkgs_for_app(udid, app_key)
+    for p in pkgs:
+        try:
+            _adb_shell(udid, f'am force-stop {p}')
+        except:
+            pass
+    _adb_shell(udid, 'media dispatch pause')
+    return pkgs
+
+
+def _pause_app_on_devices(app_key):
+    if app_key not in SUPPORTED_APPS:
+        return
+    worker_app_paused.add(app_key)
+    closed_count = 0
+    closed_pkgs = []
+    try:
+        result = subprocess.run([adb_path, 'devices', '-l'], stdout=subprocess.PIPE, text=True, startupinfo=startupinfo)
+        for line in result.stdout.strip().split('\n')[1:]:
+            if '\tdevice' not in line and '   device ' not in line:
+                continue
+            udid = line.split()[0]
+            try:
+                pkgs = _force_close_app_pkgs(udid, app_key)
+                if pkgs:
+                    closed_pkgs.extend(pkgs)
+                    closed_count += 1
+                _timer_log(f"{app_key.upper()} PAUSADO — cerrado en {udid}: {', '.join(pkgs) or 'N/A'}")
+            except Exception as e:
+                _timer_log(f"{app_key.upper()} PAUSADO — error en {udid}: {e}")
+    except Exception as e:
+        _timer_log(f"{app_key.upper()} PAUSADO — error listando dispositivos: {e}")
+    _timer_log(f"{app_key.upper()} PAUSADO — cerrado en {closed_count} dispositivos ({', '.join(sorted(set(closed_pkgs))) or 'N/A'})")
+
+
+def _resume_app_on_devices(app_key):
+    if app_key not in SUPPORTED_APPS:
+        return
+    pkg = SUPPORTED_APPS[app_key]['package']
+    launch = SUPPORTED_APPS[app_key].get('launch_activity', '')
+    try:
+        result = subprocess.run([adb_path, 'devices', '-l'], stdout=subprocess.PIPE, text=True, startupinfo=startupinfo)
+        for line in result.stdout.strip().split('\n')[1:]:
+            if '\tdevice' not in line and '   device ' not in line:
+                continue
+            udid = line.split()[0]
+            try:
+                if launch:
+                    subprocess.run([adb_path, '-s', udid, 'shell', 'am', 'start', '-n', launch],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+                else:
+                    subprocess.run([adb_path, '-s', udid, 'shell', 'monkey', '-p', pkg, '-c', 'android.intent.category.LAUNCHER', '1'],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+            except:
+                pass
+    except:
+        pass
+    worker_app_paused.discard(app_key)
+    _timer_log(f"{app_key.upper()} REANUDADO — abierto en todos los dispositivos")
 
 
 _TZ_OFFSETS = {
@@ -6722,88 +7595,81 @@ def _get_now_in_tz(tz_name):
         return datetime.now(timezone(timedelta(hours=offset_h)))
 
 
-def _timer_log(msg, quiet=False):
-    ts = datetime.now().strftime("%H:%M:%S")
-    _timer_state["log"].append({"time": ts, "msg": msg})
-    if not quiet:
-        add_log("INFO", "timer", msg)
-
-
 @app.route('/get_timer', methods=['GET'])
 @require_token
 def get_timer():
-    return jsonify({
-        "enabled": _timer_state["enabled"],
-        "timezone": _timer_state["timezone"],
-        "stop_hour": _timer_state["stop_hour"],
-        "stop_minute": _timer_state["stop_minute"],
-        "triggered": _timer_state["triggered"],
-        "start_enabled": _timer_start_state["enabled"],
-        "start_hour": _timer_start_state["start_hour"],
-        "start_minute": _timer_start_state["start_minute"],
-        "start_triggered": _timer_start_state["triggered"],
-        "log": _timer_state["log"][-20:]
-    })
+    result = {"timers": {}, "timezone": _per_app_timers["all"].get("timezone", "America/Mexico_City"), "paused_apps": list(worker_app_paused), "log": _timer_log_entries[-30:]}
+    for ak in ['all', 'spotify', 'tidal', 'apple']:
+        t = _per_app_timers[ak]
+        result["timers"][ak] = {
+            "stop_enabled": t["stop_enabled"], "stop_hour": t["stop_hour"], "stop_minute": t["stop_minute"], "stop_triggered": t["stop_triggered"],
+            "start_enabled": t["start_enabled"], "start_hour": t["start_hour"], "start_minute": t["start_minute"], "start_triggered": t["start_triggered"],
+        }
+    return jsonify(result)
 
 
 @app.route('/set_timer', methods=['POST'])
 @require_token
 def set_timer():
     data = request.json or {}
-    _timer_state["enabled"] = data.get("enabled", False)
-    _timer_state["timezone"] = data.get("timezone", "America/Mexico_City")
-    stop_time = data.get("stop_time", "22:00")
-    parts = stop_time.split(":")
-    try:
-        _timer_state["stop_hour"] = int(parts[0])
-        _timer_state["stop_minute"] = int(parts[1])
-    except (IndexError, ValueError):
-        return jsonify({"success": False, "error": "Invalid time format"}), 400
-    _timer_state["triggered"] = False
-    msg = f"Temporizador de parada {'activado' if _timer_state['enabled'] else 'desactivado'}: {_timer_state['stop_hour']:02d}:{_timer_state['stop_minute']:02d} ({_timer_state['timezone']})"
-    _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
-    add_log("INFO", "timer", msg)
-    return jsonify({"success": True, "state": _timer_state})
-
-
-@app.route('/set_start_timer', methods=['POST'])
-@require_token
-def set_start_timer():
-    data = request.json or {}
-    _timer_start_state["enabled"] = data.get("enabled", False)
-    start_time = data.get("start_time", "08:00")
-    parts = start_time.split(":")
-    try:
-        _timer_start_state["start_hour"] = int(parts[0])
-        _timer_start_state["start_minute"] = int(parts[1])
-    except (IndexError, ValueError):
-        return jsonify({"success": False, "error": "Invalid time format"}), 400
-    _timer_start_state["triggered"] = False
-    msg = f"Temporizador de inicio {'activado' if _timer_start_state['enabled'] else 'desactivado'}: {_timer_start_state['start_hour']:02d}:{_timer_start_state['start_minute']:02d}"
-    _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
-    add_log("INFO", "timer", msg)
+    app_key = data.get("app_key", "all")
+    if app_key not in _per_app_timers:
+        return jsonify({"success": False, "error": f"Invalid app_key: {app_key}"}), 400
+    t = _per_app_timers[app_key]
+    if "timezone" in data:
+        _per_app_timers["all"]["timezone"] = data["timezone"]
+    action = data.get("action")
+    time_str = data.get("time")
+    if action and time_str:
+        key = action + "_enabled"
+        t[key] = data.get("enabled", True)
+        parts = time_str.split(":")
+        try:
+            t[action + "_hour"] = int(parts[0])
+            t[action + "_minute"] = int(parts[1])
+        except (IndexError, ValueError):
+            return jsonify({"success": False, "error": "Invalid time"}), 400
+        t[action + "_triggered"] = False
+    else:
+        if "stop_time" in data:
+            t["stop_enabled"] = data.get("stop_enabled", True)
+            parts = data["stop_time"].split(":")
+            try:
+                t["stop_hour"] = int(parts[0])
+                t["stop_minute"] = int(parts[1])
+            except (IndexError, ValueError):
+                return jsonify({"success": False, "error": "Invalid stop time"}), 400
+            t["stop_triggered"] = False
+        if "start_time" in data:
+            t["start_enabled"] = data.get("start_enabled", True)
+            parts = data["start_time"].split(":")
+            try:
+                t["start_hour"] = int(parts[0])
+                t["start_minute"] = int(parts[1])
+            except (IndexError, ValueError):
+                return jsonify({"success": False, "error": "Invalid start time"}), 400
+            t["start_triggered"] = False
+    tz = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+    if t["stop_enabled"]:
+        _timer_log(f"[{app_key.upper()}] Parada activada: {t['stop_hour']:02d}:{t['stop_minute']:02d} ({tz})")
+    if t["start_enabled"]:
+        _timer_log(f"[{app_key.upper()}] Inicio activado: {t['start_hour']:02d}:{t['start_minute']:02d} ({tz})")
     return jsonify({"success": True})
 
 
 @app.route('/cancel_timer', methods=['POST'])
 @require_token
 def cancel_timer():
-    _timer_state["enabled"] = False
-    _timer_state["triggered"] = False
-    msg = "Temporizador de parada cancelado"
-    _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
-    add_log("INFO", "timer", msg)
-    return jsonify({"success": True})
-
-
-@app.route('/cancel_start_timer', methods=['POST'])
-@require_token
-def cancel_start_timer():
-    _timer_start_state["enabled"] = False
-    _timer_start_state["triggered"] = False
-    msg = "Temporizador de inicio cancelado"
-    _timer_state["log"].append({"time": datetime.now().strftime("%H:%M:%S"), "msg": msg})
-    add_log("INFO", "timer", msg)
+    data = request.json or {}
+    app_key = data.get("app_key", "all")
+    if app_key not in _per_app_timers:
+        return jsonify({"success": False, "error": f"Invalid app_key: {app_key}"}), 400
+    t = _per_app_timers[app_key]
+    t["stop_enabled"] = False
+    t["start_enabled"] = False
+    t["stop_triggered"] = False
+    t["start_triggered"] = False
+    _timer_log(f"[{app_key.upper()}] Temporizadores desactivados")
     return jsonify({"success": True})
 
 
@@ -6833,7 +7699,7 @@ def _start_bot_by_timer():
         global config_links_batch_id, config_tidal_links_batch_id, config_apple_links_batch_id
         global config_session_time, config_use_webhook, config_webhook_name
         global config_webhook_url, config_webhook_interval, config_shuffle_perc
-        global config_search_links_perc, config_streaming_mode_only, config_use_clonned_apks
+        global config_search_links_perc, config_streaming_mode_only, config_use_clonned_apks, config_validate_proxy
         global config_selected_apps, config_spotify_playtime, config_tidal_playtime, config_apple_playtime
         global worker_loaded_spotify_links, worker_loaded_tidal_links, worker_loaded_apple_links
         global worker_loaded_link, worker_loaded_accounts, worker_loaded_proxies
@@ -6850,6 +7716,7 @@ def _start_bot_by_timer():
         config_tidal_playtime = config_data.get('tidal_playtime', '') or ''
         config_apple_playtime = config_data.get('apple_playtime', '') or ''
         config_streaming_mode_only = config_data.get('streaming_mode_only')
+        config_validate_proxy = config_data.get('validate_proxy', False)
         config_use_clonned_apks = config_data.get('use_clonned_apks')
 
         raw_apps = config_data.get('selected_apps', ['spotify'])
@@ -6902,6 +7769,7 @@ def _start_bot_by_timer():
             webhook_thread.start()
 
         worker_bot_running = True
+        _reset_stop_flags()
         _timer_log(f"Bot starting with config {config_name}, apps: {config_selected_apps}")
         bot_thread = threading.Thread(target=main_function, args=(config_data,))
         bot_thread.start()
@@ -6916,38 +7784,44 @@ def _start_bot_by_timer():
 
 
 def _timer_check_thread():
-    _timer_log("Timer thread started")
+    _timer_log("Timer thread per-app started")
     while True:
         try:
-            now = _get_now_in_tz(_timer_state["timezone"])
-            if _timer_start_state["enabled"] and not _timer_start_state["triggered"]:
-                if now.hour == _timer_start_state["start_hour"] and now.minute == _timer_start_state["start_minute"]:
-                    _timer_start_state["triggered"] = True
-                    _timer_start_state["enabled"] = False
-                    msg = f"TEMPORIZADOR DE INICIO EJECUTADO a las {now.strftime('%H:%M:%S')} — iniciando bot..."
-                    _timer_log(msg)
-                    add_log("SUCC", "timer", msg)
-                    _timer_log(f"DEBUG: worker_bot_running={worker_bot_running}")
-                    if not worker_bot_running:
-                        result = _start_bot_by_timer()
-                        if result:
-                            _timer_log("Bot iniciado correctamente por temporizador")
+            tz = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+            now = _get_now_in_tz(tz)
+            for ak in ['all', 'spotify', 'tidal', 'apple']:
+                t = _per_app_timers[ak]
+                if t["start_enabled"] and not t["start_triggered"]:
+                    if now.hour == t["start_hour"] and now.minute == t["start_minute"]:
+                        t["start_triggered"] = True
+                        t["start_enabled"] = False
+                        if ak == 'all':
+                            _timer_log(f"ALL INICIO a las {now.strftime('%H:%M:%S')} — iniciando bot completo")
+                            if not worker_bot_running:
+                                if _start_bot_by_timer():
+                                    _timer_log("Bot iniciado correctamente")
+                                else:
+                                    _timer_log("ERROR: No se pudo iniciar el bot")
+                            else:
+                                _timer_log("Bot ya está corriendo")
                         else:
-                            _timer_log("ERROR: No se pudo iniciar el bot por temporizador")
-                    else:
-                        _timer_log("Bot ya está corriendo, no se reinicia")
-            if _timer_state["enabled"] and not _timer_state["triggered"]:
-                if now.hour == _timer_state["stop_hour"] and now.minute == _timer_state["stop_minute"]:
-                    _timer_state["triggered"] = True
-                    _timer_state["enabled"] = False
-                    msg = f"TEMPORIZADOR DE PARADA EJECUTADO a las {now.strftime('%H:%M:%S')} — deteniendo bot..."
-                    _timer_log(msg)
-                    add_log("SUCC", "timer", msg)
-                    try:
-                        _stop_bot()
-                        _timer_log("Bot detenido correctamente por temporizador")
-                    except Exception as e:
-                        _timer_log(f"Error al detener bot: {e}")
+                            if ak in worker_app_paused:
+                                _resume_app_on_devices(ak)
+                            else:
+                                _timer_log(f"{ak.upper()} ya está activo, no necesita reanudar")
+                if t["stop_enabled"] and not t["stop_triggered"]:
+                    if now.hour == t["stop_hour"] and now.minute == t["stop_minute"]:
+                        t["stop_triggered"] = True
+                        t["stop_enabled"] = False
+                        if ak == 'all':
+                            _timer_log(f"ALL PARADA a las {now.strftime('%H:%M:%S')} — deteniendo bot completo")
+                            try:
+                                _stop_bot()
+                                _timer_log("Bot detenido correctamente")
+                            except Exception as e:
+                                _timer_log(f"Error al detener bot: {e}")
+                        else:
+                            _pause_app_on_devices(ak)
         except Exception as e:
             _timer_log(f"Timer thread error: {e}")
         time.sleep(5)
@@ -6962,12 +7836,22 @@ def _stop_bot():
     try:
         for thread_number in list(worker_threads.keys()):
             stop_flags[thread_number] = True
+        stop_flags['all'] = True
         for thread_info in worker_threads.values():
             thread = thread_info.get("thread")
             if thread and thread.is_alive():
-                thread.join(timeout=3)
+                thread.join(timeout=45)
         worker_threads.clear()
+        _reset_stop_flags()
         worker_bot_running = False
+        worker_app_paused.clear()
+        proxy_blocked_devices.clear()
+        for ak in _per_app_timers:
+            if ak != 'all':
+                _per_app_timers[ak]['start_enabled'] = False
+                _per_app_timers[ak]['stop_enabled'] = False
+                _per_app_timers[ak]['start_triggered'] = False
+                _per_app_timers[ak]['stop_triggered'] = False
 
         apps_to_close = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
         try:
@@ -7050,7 +7934,7 @@ def install_update():
         import urllib.request
         import urllib.error
         import ssl
-        app_dir = os.path.dirname(os.path.abspath(__file__))
+        app_dir = _bundle_app_dir()
         branch = "main"
         downloaded = []
         failed = []
