@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.9"
+Bot_version = "4.5.0"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -110,6 +110,14 @@ SUPPORTED_APPS = {
         'package': 'com.aspiro.tidal',
         'display_name': 'Tidal',
         'launch_activity': 'com.aspiro.tidal/com.aspiro.wamp.LoginFragmentActivity',
+    },
+    'sound_assistant_9_11': {
+        'package': 'com.samsung.android.soundassistant',
+        'display_name': 'Sound Assistant 9-11',
+    },
+    'sound_assistant_12_14': {
+        'package': 'com.samsung.android.soundassistant',
+        'display_name': 'Sound Assistant 12-14',
     },
 }
 
@@ -255,6 +263,7 @@ confog_amount_of_cloned_apks_to_run = 5
 config_validate_proxy = False
 
 proxy_blocked_devices = set()
+_multi_sound_ok_devices = set()
 
 settings_capsolver_api_key = None
 
@@ -1466,6 +1475,82 @@ def panda_numbers():
                 numbers.append(p)
         numbers.sort(key=lambda x: x['num'])
         return jsonify({'numbers': numbers}), 200
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/device_android_versions', methods=['GET'])
+@require_token
+def device_android_versions():
+    """Live Android version per Panda-numbered phone.
+    Returns: { devices: [ {panda, serial, model, api, android_release, android_display} ] }
+    Reads Panda device.db for numbering + `adb devices` + getprop per connected phone."""
+    try:
+        import sqlite3 as sqlite3_mod
+        db_path = os.path.join(os.path.expandvars('%APPDATA%'), '6WPTMA9HZO', 'device.db')
+        panda_rows = []
+        if os.path.exists(db_path):
+            try:
+                conn = sqlite3_mod.connect(db_path)
+                rows = conn.execute(
+                    "SELECT onlySerial, sort, name FROM device WHERE userDelete=0"
+                ).fetchall()
+                conn.close()
+                for serial, num, name in rows:
+                    try:
+                        panda_rows.append({'num': int(num), 'serial': str(serial), 'model': str(name or '')})
+                    except (ValueError, TypeError):
+                        continue
+            except Exception as e:
+                add_log("WARN", "Main", f"android_versions: could not read Panda db: {str(e)}")
+
+        result = subprocess.run(
+            [adb_path, 'devices'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            startupinfo=startupinfo, timeout=30
+        )
+        connected = set()
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line or line.startswith('List of devices') or '\t' not in line:
+                continue
+            serial, state = line.split('\t', 1)
+            if state.strip() == 'device':
+                connected.add(serial.strip())
+
+        def _getprop(serial, prop):
+            try:
+                r = subprocess.run(
+                    [adb_path, '-s', serial, 'shell', 'getprop', prop],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                    startupinfo=startupinfo, timeout=10
+                )
+                return r.stdout.strip()
+            except Exception:
+                return ''
+
+        devices = []
+        for p in panda_rows:
+            if p['serial'] not in connected:
+                continue
+            api = _getprop(p['serial'], 'ro.build.version.sdk')
+            release = _getprop(p['serial'], 'ro.build.version.release')
+            model = p['model'] or _getprop(p['serial'], 'ro.product.model')
+            try:
+                api_int = int(api) if api.isdigit() else None
+            except (ValueError, TypeError):
+                api_int = None
+            devices.append({
+                'panda': p['num'],
+                'serial': p['serial'],
+                'model': model,
+                'api': api_int,
+                'android_release': release,
+                'android_display': (f"Android {release} (API {api_int})" if release and api_int else
+                                    (release or api or 'desconocido'))
+            })
+        devices.sort(key=lambda x: x['panda'])
+        return jsonify({'devices': devices}), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -5660,53 +5745,58 @@ def _open_apple_human(d, udid, link, artist_name=None, album_name=None):
 
 
 _MULTI_AUDIO_DEX_B64 = (
-    'ZGV4CjAzNQBNODdMxdLpYwRlf7GeDJp0BBBd9Pa4pjWkDQAAcAAAAHhWNBIAAAAAAAAAAOAMAAA/AAAAcAAAABEAAABsAQAACwAA'
-    'ALABAAAEAAAANAIAAA4AAABUAgAAAQAAAMQCAADACgAA5AIAAJYIAACcCAAApwgAALoIAADFCAAA1QgAANgIAADgCAAA6AgAAPEI'
-    'AAD7CAAAAQkAACEJAAAkCQAAKAkAAC0JAAA+CQAAQgkAAF4JAAB1CQAAigkAAJ0JAAC0CQAA1wkAAOsJAAD/CQAAGgoAAC4KAABK'
-    'CgAAVQoAAGkKAAB5CgAAfwoAAIUKAACICgAAjAoAAI8KAACjCgAAuAoAAM0KAADvCgAAAwsAAB4LAAAmCwAAMwsAADoLAAA/CwAA'
-    'SAsAAFILAABdCwAAaQsAAHgLAACACwAAmgsAAKoLAACwCwAAtQsAAL4LAADZCwAA6gsAAPQLAAD7CwAABAwAAA8AAAARAAAAEgAA'
-    'ABMAAAAUAAAAFQAAABYAAAAXAAAAGAAAABkAAAAaAAAAGwAAACEAAAAjAAAAJAAAACUAAAAmAAAAEAAAAAMAAABoCAAADAAAAAQA'
-    'AAAAAAAADQAAAAQAAABwCAAADgAAAAcAAAB4CAAADAAAAAgAAAAAAAAADQAAAAgAAACACAAADQAAAAkAAABwCAAADgAAAAsAAACI'
-    'CAAAIQAAAAwAAAAAAAAAIgAAAAwAAABwCAAAIgAAAAwAAACQCAAAAwADAB8AAAADAAQAIAAAAAoAAgAtAAAACgACADcAAAAAAAgA'
-    'BgAAAAAACgA2AAAAAgAJADgAAAADAAAAPQAAAAQAAgAuAAAABAAHADAAAAAEAAQAMgAAAAcACAAGAAAABwABAC8AAAAIAAUAPQAA'
-    'AAkACAAGAAAACQAGACoAAAAJAAQAOwAAAAsAAwAzAAAAAAAAAAEAAAAHAAAAAAAAAB0AAADIDAAAqwwAAAAAAAABAAEAAQAAABkI'
-    'AAAEAAAAcBAHAAAADgAUAAEAAwAGAB0IAABiAgAAGgEHABoCCABiAAMAGgMeAG4gAgAwABoAKQBxEAQAAAAMABITcRADAAMADAQj'
-    'NQ4AHAYIABIHTQYFBxoGMQBuMAUAYAUMACM1DwAaBiwATQYFBxIGbjANAGAFDAA5AAoAYgACABoBCwBuIAIAEAAOABoFJwBxEAQA'
-    'BQAMBSM4DgAaCSgAcRAEAAkADAlNCQgHGgkrAG4wBQCVCAwFIzgPAE0ACAduMA0AZQgMBW4QCAAFAAwIEikjmhAAGgs1AE0LCgca'
-    'DDQATQwKAxINGg4AABoPBQAaBgEANZ1tABMQAQBGAwoNI3AOAG4wBQA4AAwAI3kPAG4wDQBQCQwAYgkDAHEQCQAAAAwAExEAACIH'
-    'CQBwEAoABwBuIAsAJwAMB24gCwA3AAwHbiALAOcADAduIAsABwAMAG4QDAAAAAwAbiACAAkAKDANACgEDQATEQAAYgcDAG4QCAAA'
-    'AAwAbhAGAAAADAAiCQkAcBAKAAkAbiALACkADAluIAsAOQAMA24gCwBjAAwDbiALAAMADABuIAsA8AAMAG4QDAAAAAwAbiACAAcA'
-    '2A0NARITEgYSBxIpKI4TEAEAExEAABIiIyMQABoAOgBNAAMRGgA5AE0AAxASBzUnAwFGAgMHAAASGSOQDgBiCQEATQkAEW4wBQAo'
-    'AAwABwkoAw0AEgkSGiOgDgAcCgMATQoAEW4wBQAoAAwABwooAw0AEgoSLSPQDgBiDQEATQ0AEWINAQATEAEATQ0AEG4wBQAoAAwA'
-    'KAMNABIAGg0cAAgSAwAaAwkAOAk+AGIAAwAiCgkAcBAKAAoAbiALADoADANuIAsAIwAMAxoKAwBuIAsAowAMA24QDAADAAwDbiAC'
-    'ADAAEhojoA8ATQQAEW4wDQBZAGIAAwAiAwkAcBAKAAMAbiALANMADANuIAsAIwAMAm4QDAACAAwCbiACACAAKQCBADgAQQBiCQMA'
-    'IgoJAHAQCgAKAG4gCwA6AAwDbiALACMADAMaCgQAbiALAKMADANuEAwAAwAMA24gAgA5ABIjIzkPAE0ECRETEAEATQQJEG4wDQBQ'
-    'CWIAAwAiAwkAcBAKAAMAbiALANMADANuIAsAIwAMAm4QDAACAAwCbiACACAAKD84Cj4AYgADACIJCQBwEAoACQBuIAsAOQAMA24g'
-    'CwAjAAwDGgkCAG4gCwCTAAwDbhAMAAMADANuIAIAMAASGSOQDwBiAwAATQMAEW4wDQBaAGIAAwAiAwkAcBAKAAMAbiALANMADANu'
-    'IAsAIwAMAm4QDAACAAwCbiACACAA2AcHAQgDEgASIhMQAQApAP/+EiIjIxAATQsDERMQAQBNDAMQEgQ1JGQARgcDBBIJI5AOAG4w'
-    'BQB4AAwAI5oPAG4wDQBQCgwAYgoDAHEQCQAAAAwAIgsJAHAQCgALAG4gCwAbAAwLbiALAHsADAtuIAsA6wAMC24gCwALAAwAbhAM'
-    'AAAADABuIAIACgAoLA0AYgoDAG4QCAAAAAwAbhAGAAAADAAiCwkAcBAKAAsAbiALABsADAtuIAsAewAMB24gCwBnAAwHbiALAAcA'
-    'DABuIAsA8AAMAG4QDAAAAAwAbiACAAoA2AQEARMRAAAonWIAAwAaAQoAbiACABAADgByAAAAEgABAIYAAAAcAAUA7wAAAAoACQD+'
-    'AAAACgANAA0BAAAQABEA+wEAAC4AFQAGAQWlAQEFowEBBvsBAQaKAgEGngIBBaoEAwAOAAUBAA61aQIeHQJiStK0pmn/h00BGBBp'
-    'aQEkERtaAnoBKg4CC3fzWh7w8AEUDwFEDwFBDwJ5AT4OAguV4nhpASIRGx4CegEqDmN4AAEAAAANAAAAAQAAAAgAAAACAAAABwAP'
-    'AAEAAAAHAAAAAgAAAAgADgABAAAAEAAEIC0+IAAJIC0+IG4vYSAoABEoQm9vbGVhbi5UUlVFKS4uLgAJKHRydWUpLi4uAA4odHJ1'
-    'ZSx0cnVlKS4uLgABKQAGPGluaXQ+AAZBRlRFUiAAB0JFRk9SRSAACENhbGxpbmcgAARET05FAB5FUlJPUjogYXVkaW8gc2Vydmlj'
-    'ZSBub3QgZm91bmQAAUwAAkxMAANMTEwAD0xTZXRNdWx0aUF1ZGlvOwACTFoAGkxkYWx2aWsvYW5ub3RhdGlvbi9UaHJvd3M7ABVM'
-    'amF2YS9pby9QcmludFN0cmVhbTsAE0xqYXZhL2xhbmcvQm9vbGVhbjsAEUxqYXZhL2xhbmcvQ2xhc3M7ABVMamF2YS9sYW5nL0V4'
-    'Y2VwdGlvbjsAIUxqYXZhL2xhbmcvTm9TdWNoTWV0aG9kRXhjZXB0aW9uOwASTGphdmEvbGFuZy9PYmplY3Q7ABJMamF2YS9sYW5n'
-    'L1N0cmluZzsAGUxqYXZhL2xhbmcvU3RyaW5nQnVpbGRlcjsAEkxqYXZhL2xhbmcvU3lzdGVtOwAaTGphdmEvbGFuZy9yZWZsZWN0'
-    'L01ldGhvZDsACVNVQ0NFU1M6IAASU2V0TXVsdGlBdWRpby5qYXZhAA5TdGFydGluZyB2NC4uLgAEVFJVRQAEVFlQRQABVgACVkwA'
-    'AVoAEltMamF2YS9sYW5nL0NsYXNzOwATW0xqYXZhL2xhbmcvT2JqZWN0OwATW0xqYXZhL2xhbmcvU3RyaW5nOwAgYW5kcm9pZC5t'
-    'ZWRpYS5JQXVkaW9TZXJ2aWNlJFN0dWIAEmFuZHJvaWQub3MuSUJpbmRlcgAZYW5kcm9pZC5vcy5TZXJ2aWNlTWFuYWdlcgAGYXBw'
-    'ZW5kAAthc0ludGVyZmFjZQAFYXVkaW8AA2VycgAHZm9yTmFtZQAIZ2V0Q2xhc3MACWdldE1ldGhvZAAKZ2V0U2VydmljZQANZ2V0'
-    'U2ltcGxlTmFtZQAGaW52b2tlABhpc011bHRpQXVkaW9Gb2N1c0VuYWJsZWQADmlzTXVsdGlTb3VuZE9uAARtYWluAANvdXQAB3By'
-    'aW50bG4AGXNldE11bHRpQXVkaW9Gb2N1c0VuYWJsZWQAD3NldE11bHRpU291bmRPbgAIdG9TdHJpbmcABXZhbHVlAAd2YWx1ZU9m'
-    'AJwBfn5EOHsiYmFja2VuZCI6ImRleCIsImNvbXBpbGF0aW9uLW1vZGUiOiJkZWJ1ZyIsImhhcy1jaGVja3N1bXMiOmZhbHNlLCJt'
-    'aW4tYXBpIjoxLCJzaGEtMSI6ImE3YWQxOGE3MDQ2MGI3OTlkMDQ4MmU0OTdjMTA5YTc1YmY3ZjkxZGUiLCJ2ZXJzaW9uIjoiOC4x'
-    'MC45LWRldiJ9AAIBATwcARgFAAACAACBgATkBQEJ/AUAAAAAAAAAAQAAAKMMAAC8DAAAAAAAAAEAAAAAAAAAAQAAAMAMAAAQAAAA'
-    'AAAAAAEAAAAAAAAAAQAAAD8AAABwAAAAAgAAABEAAABsAQAAAwAAAAsAAACwAQAABAAAAAQAAAA0AgAABQAAAA4AAABUAgAABgAA'
-    'AAEAAADEAgAAASAAAAIAAADkAgAAAyAAAAIAAAAZCAAAARAAAAYAAABoCAAAAiAAAD8AAACWCAAABCAAAAEAAACjDAAAACAAAAEA'
-    'AACrDAAAAxAAAAIAAAC8DAAABiAAAAEAAADIDAAAABAAAAEAAADgDAAA'
+    'ZGV4CjAzNQBq1bP0+wexxuL0ndzy60PclZIoi5eBRAEgDwAAcAAAAHhWNBIAAAAAAAAAAFwOAABMAAAAcAAAABQAAACgAQAADwAA'
+    'APABAAACAAAApAIAABQAAAC0AgAAAQAAAFQDAACsCwAAdAMAABIIAAAWCAAAIQgAACcIAAAvCAAAWQgAAIUIAACpCAAAyQgAAPMI'
+    'AAAOCQAAIgkAACUJAAApCQAALgkAAD8JAABDCQAAXwkAAHYJAACLCQAApQkAALgJAADPCQAA8gkAAAYKAAAaCgAANQoAAEkKAABl'
+    'CgAAeQoAAIUKAAC3CgAAywoAANgKAADeCgAA4QoAAOUKAADoCgAA7AoAAAALAAAVCwAAKgsAAEcLAABpCwAAfQsAAJgLAACgCwAA'
+    'rQsAALQLAAC+CwAAxQsAAM4LAADYCwAA4wsAAO8LAAAKDAAALwwAAE8MAABYDAAAawwAAHcMAAB/DAAAhQwAAIwMAACYDAAAnQwA'
+    'AKYMAADBDAAAAg0AAA8NAAAZDQAAMA0AAFENAAByDQAAeQ0AAIINAAAOAAAAEAAAABEAAAASAAAAEwAAABQAAAAVAAAAFgAAABcA'
+    'AAAYAAAAGQAAABoAAAAbAAAAHAAAACIAAAAkAAAAJgAAACcAAAAoAAAAKQAAAA8AAAADAAAA1AcAAAsAAAAFAAAAAAAAAAwAAAAF'
+    'AAAA3AcAAA0AAAAIAAAA5AcAAAsAAAAJAAAAAAAAAAwAAAAJAAAA7AcAAAwAAAAJAAAA9AcAAAwAAAAKAAAA3AcAAA0AAAAMAAAA'
+    '/AcAACIAAAAOAAAAAAAAACMAAAAOAAAA3AcAACMAAAAOAAAABAgAACUAAAAPAAAADAgAAAsAAAAQAAAAAAAAAAsAAAATAAAAAAAA'
+    'AAMABQAhAAAACwACAEAAAAAAAAkAAwAAAAAACwA9AAAAAgAKAEEAAAADAAAASgAAAAUAAgAyAAAABQAIADQAAAAFAA4ANQAAAAUA'
+    'BAA5AAAACAAJAAMAAAAIAAEAMwAAAAkADAAwAAAACQAEAEQAAAAJAAUASgAAAAoACQADAAAACgAHAC0AAAAKAAQARQAAAAwABAA5'
+    'AAAADAANADoAAAAMAAMAPAAAAA0ABgBFAAAAAAAAAAEAAAAIAAAAAAAAAB8AAABEDgAAKA4AAAAAAAABAAEAAQAAAI0HAAAEAAAA'
+    'cBAIAAAADgAMAAEAAwADAJEHAADlAQAAYgsBABoAIABuIAIACwAaCywAcRAEAAsADAsSECMBEAAcAgkAEgNNAgEDGgI7AG4wBQAr'
+    'AQwLIwERABoCLwBNAgEDEgJuMBIAKwEMCzkLCgBiCwEAGgAHAG4gAgALAA4AYgEBAG4QCQALAAwEbhAHAAQADAQiBQoAcBANAAUA'
+    'GgYKAG4gDgBlAAwFbiAOAEUADARuEA8ABAAMBG4gAgBBABoBKgBxEAQAAQAMARoEKwBxEAQABAAMBCMFEABNBAUDGgQuAG4wBQBB'
+    'BQwBIwQRAE0LBANuMBIAIQQMCzkLCgBiCwEAGgAIAG4gAgALAA4AYgEBAG4QCQALAAwCbhAHAAIADAIiBAoAcBANAAQAGgUJAG4g'
+    'DgBUAAwEbiAOACQADAJuEA8AAgAMAm4gAgAhAGIBAQAaAgQAbiACACEAbhAJAAsADAFuEAYAAQAMASESEgQaBQIANSRTAEYGAQRu'
+    'EBAABgAMB24QCwAHAAwHGgg+AG4gCgCHAAoHOQcSAG4QEAAGAAwHbhALAAcADAcaCDEAbiAKAIcACgc4By4AYgcBAG4QEAAGAAwI'
+    'bhARAAYADAZxEBMABgAMBiIJCgBwEA0ACQAaCgAAbiAOAKkADAluIA4AiQAMCG4gDgBYAAwFbiAOAGUADAVuEA8ABQAMBW4gAgBX'
+    'ANgEBAEorG4QCQALAAwBGgJCACMEEABiBgAATQYEA24wBQAhBAwBYgIBABoEBQBuIAIAQgBxEAMAAAAMAiMAEQBNAgADbjASALEA'
+    'YgABABoBHgBuIAIAEAAoXg0AYgABABoBQwBuIAIAEABuEAkACwAMAG4QBgAAAAwAIQESAjUSSwBGBAACbhAQAAQADAYaBx0AbiAK'
+    'AHYACgY5Bg4AbhAQAAQADAYaBz8AbiAKAHYACgY4Bi4AYgYBAG4QEAAEAAwHbhARAAQADARxEBMABAAMBCIICgBwEA0ACAAaCQEA'
+    'biAOAJgADAhuIA4AeAAMB24gDgBXAAwHbiAOAEcADARuEA8ABAAMBG4gAgBGANgCAgEotm4QCQALAAwAGgFGACMyEABuMAUAEAIM'
+    'AGIBAQAaAgYAbiACACEAIzERAG4wEgCwAWIAAQAaAUgAbiACABAAKAkNAGIAAQAaAUcAbiACABAAbhAJAAsADAAaATYAIzIQAG4w'
+    'BQAQAgwAIzERAG4wEgCwAQwLYgABAHEQDAALAAwLIgEKAHAQDQABABoCOABuIA4AIQAMAW4gDgCxAAwLbhAPAAsADAtuIAIAsAAo'
+    'CQ0LYgsBABoANwBuIAIACwAOAAAA/gAAACkAAQCFAQAAHwAFAK0BAAAuAAkAAwEHqAIBB6UDAQfcAwEADgADAQAOeWkBGQ+lASAQ'
+    'aWkBEg+lASAQeP8BIA8BLAxC/3i0fwJ5HR544QEYDwEsDETDeFp6Gx58w2kBHBEbHnkAAAAAAQAAAA8AAAABAAAACQAAAAIAAAAI'
+    'ABEAAQAAAAgAAAABAAAAEQAAAAIAAAAJABAAAQAAABIAAAABAAAAABACICAACSAgRm91bmQ6IAAEIC0+IAAGPGluaXQ+AChBdmFp'
+    'bGFibGUgbWV0aG9kcyB3aXRoICd1bHRpJyBvciAnb2N1cyc6ACpDYWxsaW5nIHNldE11bHRpQXVkaW9Gb2N1c0VuYWJsZWQodHJ1'
+    'ZSkuLi4AIkNhbGxpbmcgdXBkYXRlTXVsdGlBdWRpb0ZvY3VzKCkuLi4AHkVSUk9SOiBhdWRpbyBzZXJ2aWNlIG5vdCBmb3VuZAAo'
+    'RVJST1I6IGNvdWxkIG5vdCBnZXQgYXVkaW8gc2VydmljZSBwcm94eQAZR290IElBdWRpb1NlcnZpY2UgcHJveHk6IAASR290IGF1'
+    'ZGlvIGJpbmRlcjogAAFMAAJMTAADTExMAA9MU2V0TXVsdGlBdWRpbzsAAkxaABpMZGFsdmlrL2Fubm90YXRpb24vVGhyb3dzOwAV'
+    'TGphdmEvaW8vUHJpbnRTdHJlYW07ABNMamF2YS9sYW5nL0Jvb2xlYW47ABhMamF2YS9sYW5nL0NoYXJTZXF1ZW5jZTsAEUxqYXZh'
+    'L2xhbmcvQ2xhc3M7ABVMamF2YS9sYW5nL0V4Y2VwdGlvbjsAIUxqYXZhL2xhbmcvTm9TdWNoTWV0aG9kRXhjZXB0aW9uOwASTGph'
+    'dmEvbGFuZy9PYmplY3Q7ABJMamF2YS9sYW5nL1N0cmluZzsAGUxqYXZhL2xhbmcvU3RyaW5nQnVpbGRlcjsAEkxqYXZhL2xhbmcv'
+    'U3lzdGVtOwAaTGphdmEvbGFuZy9yZWZsZWN0L01ldGhvZDsAEkxqYXZhL3V0aWwvQXJyYXlzOwAKTXVsdGlBdWRpbwAwU1VDQ0VT'
+    'UyEgc2V0TXVsdGlBdWRpb0ZvY3VzRW5hYmxlZCh0cnVlKSBjYWxsZWQhABJTZXRNdWx0aUF1ZGlvLmphdmEAC1N0YXJ0aW5nLi4u'
+    'AARUWVBFAAFWAAJWTAABWgACWkwAEltMamF2YS9sYW5nL0NsYXNzOwATW0xqYXZhL2xhbmcvT2JqZWN0OwATW0xqYXZhL2xhbmcv'
+    'U3RyaW5nOwAbW0xqYXZhL2xhbmcvcmVmbGVjdC9NZXRob2Q7ACBhbmRyb2lkLm1lZGlhLklBdWRpb1NlcnZpY2UkU3R1YgASYW5k'
+    'cm9pZC5vcy5JQmluZGVyABlhbmRyb2lkLm9zLlNlcnZpY2VNYW5hZ2VyAAZhcHBlbmQAC2FzSW50ZXJmYWNlAAZhdWRpbwAIY29u'
+    'dGFpbnMABWZvY3VzAAdmb3JOYW1lAAhnZXRDbGFzcwAJZ2V0TWV0aG9kAApnZXRNZXRob2RzABlnZXRNdWx0aUF1ZGlvRm9jdXNF'
+    'bmFibGVkACNnZXRNdWx0aUF1ZGlvRm9jdXNFbmFibGVkIG5vdCBmb3VuZAAeZ2V0TXVsdGlBdWRpb0ZvY3VzRW5hYmxlZCgpID0g'
+    'AAdnZXROYW1lABFnZXRQYXJhbWV0ZXJUeXBlcwAKZ2V0U2VydmljZQAGaW52b2tlAARtYWluAAVtdWx0aQAKbXVsdGlBdWRpbwAD'
+    'b3V0AAdwcmludGxuABlzZXRNdWx0aUF1ZGlvRm9jdXNFbmFibGVkAD9zZXRNdWx0aUF1ZGlvRm9jdXNFbmFibGVkIG5vdCBmb3Vu'
+    'ZCwgdHJ5aW5nIGJvb2xlYW4gdmFyaWFudHMuLi4AC3RvTG93ZXJDYXNlAAh0b1N0cmluZwAVdXBkYXRlTXVsdGlBdWRpb0ZvY3Vz'
+    'AB91cGRhdGVNdWx0aUF1ZGlvRm9jdXMgbm90IGZvdW5kAB91cGRhdGVNdWx0aUF1ZGlvRm9jdXMoKSBjYWxsZWQhAAV2YWx1ZQAH'
+    'dmFsdWVPZgCbAX5+RDh7ImJhY2tlbmQiOiJkZXgiLCJjb21waWxhdGlvbi1tb2RlIjoiZGVidWciLCJoYXMtY2hlY2tzdW1zIjpm'
+    'YWxzZSwibWluLWFwaSI6MSwic2hhLTEiOiIwODRhODkxMjZhZTA1OTZjNTk5MTQzZGY1N2E2NTQ2NDZhZjI4MzEzIiwidmVyc2lv'
+    'biI6IjkuMi40LWRldiJ9AAIBAUkcARgGAAACAACBgAT0BgEJjAcAAAAAAAABIAAAAIA4AADgOAAAAAAAAAQAAAAAAAAABAAAAPA4'
+    'AABAAAAAAAAAAAQAAAAAAAAABAAAATAAAAHAAAAACAAAAFAAAAKABAAADAAAADwAAAPABAAAEAAAAAgAAAKQCAAAFAAAAFAAAALQ'
+    'CAAAGAAAAAQAAAFQDAAABIAAAAgAAAHQDAAADIAAAAgAAAI0HAAABEAAACAAAANQHAAACIAAATAAAABIIAAAEIAAAAQAAACAOAAA'
+    'AIAAAAQAAACgOAAADEAAAAgAAADgOAAAGIAAAAQAAAEQOAAAAEAAAAQAAAFwOAAA'
 )
 
 
@@ -6127,14 +6217,16 @@ def _enable_multi_audio_focus(udid):
 
         if 'Multi Audio Focus enabled :true' in out:
             add_log("SUCC", udid, "[MultiApp] Multi Audio Focus ENABLED on device")
+            _multi_sound_ok_devices.add(udid)
             return True
         else:
             # IsMultiSoundOn is the REAL state on OneUI 6/7 (dumpsys flag is legacy)
             if b'BEFORE isMultiSoundOn -> true' in stdout_out or b'AFTER isMultiSoundOn -> true' in stdout_out:
                 add_log("SUCC", udid, "[MultiApp] Multi Sound ON confirmed via isMultiSoundOn")
+                _multi_sound_ok_devices.add(udid)
                 return True
             if b'BEFORE isMultiSoundOn -> false' in stdout_out and b'AFTER isMultiSoundOn -> false' in stdout_out:
-                add_log("WARN", udid, "[MultiApp] isMultiSoundOn stuck false: Sound Assistant needed or non-Samsung ROM")
+                add_log("WARN", udid, "[MultiApp] isMultiSoundOn stuck false: Sound Assistant needed or non-Samsung ROM (single-app mode for this phone)")
                 return True
             add_log("WARN", udid, "[MultiApp] Multi Audio Focus call made but state still reported off (may be enabled anyway)")
             return True
@@ -6937,6 +7029,17 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
                     except Exception:
                         pass
                 if _np_state != 'PLAYING':
+                    # Force RESUME: media play -> wait -> check; then NEXT as last resort
+                    _adb_media_play(udid)
+                    add_log("INFO", udid, f"[MultiApp] [{display_name}] Not PLAYING; sent media PLAY, waiting...")
+                    time.sleep(5)
+                    _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+                    if _np_state != 'PLAYING':
+                        _adb_media_next(udid)
+                        add_log("INFO", udid, f"[MultiApp] [{display_name}] Still not PLAYING; sent NEXT...")
+                        time.sleep(6)
+                        _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+                if _np_state != 'PLAYING':
                     add_log("WARN", udid, f"[MultiApp] [{display_name}] Not PLAYING ({_np_state}) at end of playtime; not counting stream.")
                     app_timers[app_key] = now
                     app_next_action_time[app_key] = now + random.uniform(15, 35)
@@ -7504,6 +7607,13 @@ def main_function(config_data):
                 continue
             installed_selected.append(app_key)
 
+        # If this phone does NOT have real Multi Sound (isMultiSoundOn stuck false),
+        # running 2+ apps just leaves others STOPPED. Force single app = Spotify.
+        if len(installed_selected) > 1 and udid not in _multi_sound_ok_devices:
+            if 'spotify' in installed_selected:
+                add_log("WARN", udid, f"[MultiApp] No real MultiSound detected on this device; running Spotify only ({installed_selected} -> ['spotify'])")
+                installed_selected = ['spotify']
+
         if len(installed_selected) > 1:
             add_log("INFO", udid, f"[MultiApp] {len(installed_selected)} apps installed: {installed_selected}. Using coordinated multi-app mode.")
             _st_raw = str(config_session_time).strip() or '8-8'
@@ -7649,7 +7759,9 @@ INSTALL_APKS = {
             os.path.join(_bundle_app_dir(), 'apk', 'AppleMusic_split_config.arm64_v8a.apk'),
             os.path.join(_bundle_app_dir(), 'apk', 'AppleMusic_split_config.xxhdpi.apk'),
         ]
-    }
+    },
+    'sound_assistant_9_11': os.path.join(_bundle_app_dir(), 'apk', 'SoundAssistant_1.3.5.14.1.apk'),
+    'sound_assistant_12_14': os.path.join(_bundle_app_dir(), 'apk', 'SoundAssistant.apk'),
 }
 
 @app.route('/install_apps', methods=['POST'])
