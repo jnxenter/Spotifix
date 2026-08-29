@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.0.8"
+Bot_version = "4.0.9"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5776,10 +5776,14 @@ def _enable_multi_audio_focus(udid):
             add_log("SUCC", udid, "[MultiApp] Multi Audio Focus ENABLED on device")
             return True
         else:
-            if b'ERROR' in stderr_out or b'not found' in stderr_out:
-                add_log("WARN", udid, "[MultiApp] MultiAudioFocus method unavailable on this ROM")
-            else:
-                add_log("WARN", udid, "[MultiApp] Multi Audio Focus call made but state still reported off (may be enabled anyway)")
+            # IsMultiSoundOn is the REAL state on OneUI 6/7 (dumpsys flag is legacy)
+            if b'BEFORE isMultiSoundOn -> true' in stdout_out or b'AFTER isMultiSoundOn -> true' in stdout_out:
+                add_log("SUCC", udid, "[MultiApp] Multi Sound ON confirmed via isMultiSoundOn")
+                return True
+            if b'BEFORE isMultiSoundOn -> false' in stdout_out and b'AFTER isMultiSoundOn -> false' in stdout_out:
+                add_log("WARN", udid, "[MultiApp] isMultiSoundOn stuck false: Sound Assistant needed or non-Samsung ROM")
+                return True
+            add_log("WARN", udid, "[MultiApp] Multi Audio Focus call made but state still reported off (may be enabled anyway)")
             return True
     except Exception as e:
         add_log("ERR.", udid, f"[MultiApp] Failed to enable Multi Audio Focus: {e}")
