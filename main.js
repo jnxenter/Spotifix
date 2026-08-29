@@ -390,12 +390,14 @@ if (!gotTheLock) {
         const apiExePathAlt = path.join(appPath, 'api', 'api.exe');
         const apiPyPath = path.join(appPath, 'api.py');
         let proc;
-        if (fs.existsSync(apiExePath)) {
+        // IMPORTANT: prefer python api.py so the in-app updater (which replaces
+        // api.py/main.js/etc. but NEVER api/api.exe) actually takes effect.
+        if (fs.existsSync(apiPyPath)) {
+            proc = spawn('python', [apiPyPath], { cwd: appPath });
+        } else if (fs.existsSync(apiExePath)) {
             proc = spawn(apiExePath, [], { cwd: appPath });
         } else if (fs.existsSync(apiExePathAlt)) {
             proc = spawn(apiExePathAlt, [], { cwd: path.join(appPath, 'api') });
-        } else if (fs.existsSync(apiPyPath)) {
-            proc = spawn('python', [apiPyPath], { cwd: appPath });
         } else {
             proc = spawn('python', ['api.py']); // fallback
         }
