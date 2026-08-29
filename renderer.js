@@ -1006,6 +1006,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (document.getElementById('installSpotifyCheck').checked) apps.push('spotify');
                     if (document.getElementById('installTidalCheck').checked) apps.push('tidal');
                     if (document.getElementById('installAppleCheck').checked) apps.push('apple_music');
+                    if (document.getElementById('installSA911Check').checked) apps.push('sound_assistant_9_11');
+                    if (document.getElementById('installSA1214Check').checked) apps.push('sound_assistant_12_14');
                     if (!apps.length) {
                         resultDiv.innerHTML = '<p style="color: orange;">Selecciona al menos una app.</p>';
                         return;
@@ -1529,6 +1531,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 // Load settings if the settings tab is shown
                 if (tabName === 'settings') {
                     loadSettings();
+                    startAndroidVersionsLoop();
+                } else {
+                    if (androidVersionsTimer) {
+                        clearInterval(androidVersionsTimer);
+                        androidVersionsTimer = null;
+                    }
                 }
                 if (tabName === 'chat') {
                     refreshChatStatus();
@@ -1657,6 +1665,8 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             function loadBatchOptions(selectId, batchType) {
+                const select = document.getElementById(selectId);
+                if (!select) return; // select no presente en esta vista; skip
                 fetch(`http://localhost:8999/get_batches?type=${batchType}`, {
                     headers: {
                         'Authorization': `Bearer ${authToken}` // Add the token here
@@ -1664,7 +1674,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
                     .then(response => response.json())
                     .then(data => {
-                        const select = document.getElementById(selectId);
                         select.innerHTML = '';
                         data.batches.forEach(batch => {
                             const option = document.createElement('option');
@@ -2153,6 +2162,54 @@ document.addEventListener('DOMContentLoaded', () => {
                     .catch(error => {
                         console.error('Error loading settings:', error);
                     });
+            }
+
+            // ---- Android versions live table (Settings) ----
+            var androidVersionsTimer = null;
+
+            function fetchAndroidVersions() {
+                const container = document.getElementById('androidVersionsTable');
+                if (!container) return;
+                fetch('http://localhost:8999/device_android_versions', {
+                    headers: { 'Authorization': `Bearer ${authToken}` }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (!data.devices) {
+                            container.innerHTML = '<p style="color:#888;">Sin datos: ' + (data.error || '') + '</p>';
+                            return;
+                        }
+                        if (!data.devices.length) {
+                            container.innerHTML = '<p style="color:#888;">No hay teléfonos conectados.</p>';
+                            return;
+                        }
+                        let html = '<table class="version-table">';
+                        html += '<thead><tr><th>Panda #</th><th>Serial</th><th>Modelo</th><th>Android</th><th>SA sugerido</th></tr></thead><tbody>';
+                        data.devices.forEach(d => {
+                            let sa = '';
+                            if (d.api === null || d.api === undefined) sa = '<span style="color:#888;">?</span>';
+                            else if (d.api < 12) sa = '<span style="color:#2ecc71;">SA 9-11</span>';
+                            else sa = '<span style="color:#e67e22;">SA 12-14</span>';
+                            html += '<tr>' +
+                                '<td><b>' + d.panda + '</b></td>' +
+                                '<td>' + d.serial + '</td>' +
+                                '<td>' + d.model + '</td>' +
+                                '<td>' + d.android_display + '</td>' +
+                                '<td>' + sa + '</td>' +
+                                '</tr>';
+                        });
+                        html += '</tbody></table>';
+                        container.innerHTML = html;
+                    })
+                    .catch(error => {
+                        console.error('Error fetching android versions:', error);
+                    });
+            }
+
+            function startAndroidVersionsLoop() {
+                if (androidVersionsTimer) clearInterval(androidVersionsTimer);
+                fetchAndroidVersions();
+                androidVersionsTimer = setInterval(fetchAndroidVersions, 10000);
             }
 
             function updateChart() {
