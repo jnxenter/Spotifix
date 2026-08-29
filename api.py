@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.0.4"
+Bot_version = "4.0.5"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5754,18 +5754,44 @@ def _enable_multi_audio_focus(udid):
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
                        startupinfo=startupinfo)
         _adb_shell(udid, 'chmod 644 /data/local/tmp/_multi_focus.dex')
-        subprocess.run([adb_path, '-s', udid, 'shell',
-                        'CLASSPATH=/data/local/tmp/_multi_focus.dex app_process / SetMultiAudio'],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15,
-                       startupinfo=startupinfo)
+
+        stderr_out = b''
+        stdout_out = b''
+        # Try via su (Magisk) first, fallback to plain app_process (adb root / shell)
+        with_su = subprocess.run(
+            [adb_path, '-s', udid, 'shell',
+             'su -c "CLASSPATH=/data/local/tmp/_multi_focus.dex app_process / SetMultiAudio"'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15, startupinfo=startupinfo)
+        if b'SUCCESS' in with_su.stdout or b'SUCCESS' in with_su.stderr:
+            stdout_out, stderr_out = with_su.stdout, with_su.stderr
+        else:
+            plain = subprocess.run(
+                [adb_path, '-s', udid, 'shell',
+                 'CLASSPATH=/data/local/tmp/_multi_focus.dex app_process / SetMultiAudio'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15, startupinfo=startupinfo)
+            stdout_out, stderr_out = plain.stdout, plain.stderr
+
+        if stdout_out.strip():
+            for ln in stdout_out.decode('utf-8', 'replace').splitlines()[:12]:
+                add_log("INFO", udid, f"[MultiApp] MultiFocus> {ln.strip()}")
+        if stderr_out.strip():
+            for ln in stderr_out.decode('utf-8', 'replace').splitlines()[:6]:
+                add_log("INFO", udid, f"[MultiApp] MultiFocus! {ln.strip()}")
 
         time.sleep(1)
         out = _adb_shell(udid, 'dumpsys audio')
+        mf_lines = [l.strip() for l in out.splitlines() if 'Multi Audio Focus' in l]
+        if mf_lines:
+            add_log("INFO", udid, f"[MultiApp] dumpsys> {mf_lines[0]}")
+
         if 'Multi Audio Focus enabled :true' in out:
             add_log("SUCC", udid, "[MultiApp] Multi Audio Focus ENABLED on device")
             return True
         else:
-            add_log("WARN", udid, "[MultiApp] Multi Audio Focus call succeeded but state not confirmed")
+            if b'ERROR' in stderr_out or b'not found' in stderr_out:
+                add_log("WARN", udid, "[MultiApp] MultiAudioFocus method unavailable on this ROM")
+            else:
+                add_log("WARN", udid, "[MultiApp] Multi Audio Focus call made but state not confirmed")
             return True
     except Exception as e:
         add_log("ERR.", udid, f"[MultiApp] Failed to enable Multi Audio Focus: {e}")
