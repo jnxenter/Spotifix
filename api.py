@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.8"
+Bot_version = "4.1.9"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -6083,12 +6083,8 @@ def _enable_multi_audio_focus(udid):
 
     try:
         import base64
-        # SoundAssistant 3.5.14.1 (minAPI28) works on Android 10+; enable Multi Sound before DEX.
-        try:
-            d = ua.connect(udid)
-            _ensure_sound_assistant_multisound(d, udid)
-        except Exception as e:
-            add_log("WARN", udid, f"[MultiApp] Sound Assistant pre-step skipped: {e}")
+        # Sound Assistant is configured manually by the user; just run the DEX here.
+        add_log("INFO", udid, "[MultiApp] Sound Assistant setup skipped (manual). Running DEX...")
 
         dex_data = base64.b64decode(_MULTI_AUDIO_DEX_B64)
         tmp_dex = os.path.join(os.environ.get('TEMP', os.path.dirname(__file__)), '_multi_focus.dex')
