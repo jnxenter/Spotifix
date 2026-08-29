@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.1"
+Bot_version = "4.1.2"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5755,7 +5755,7 @@ def _ensure_sound_assistant_multisound(d, udid):
         _human_delay(2.5, 4.0)
         d = ua.connect(udid)
 
-        # find "Multi Sound" / "Multi sound" row/switch in the dump
+        # find "Multisound" row/switch in the dump (SoundAssistant 3.5.14.1 uses "Multisound")
         xml = ''
         try:
             xml = d.dump_hierarchy(False)
@@ -5763,16 +5763,18 @@ def _ensure_sound_assistant_multisound(d, udid):
             pass
         low = xml.lower()
         target = None
-        for pat in ('multi sound', 'multi-sound', 'multisound', 'sonido múltiple', 'sonido multipl'):
+        for pat in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl', 'multi-sound'):
             if pat in low:
                 target = pat
                 break
         if not target:
-            add_log("WARN", udid, "[MultiApp] Multi Sound row not visible on Sound Assistant screen; trying top switches")
+            add_log("WARN", udid, "[MultiApp] Multi Sound row not visible on Sound Assistant screen; trying screen click")
             return True  # let DEX still report isMultiSoundOn
 
         # click the row, then toggle switch ON
-        row = d(textContains='Multi Sound')
+        row = d(textContains='Multisound')
+        if not row.exists(timeout=2):
+            row = d(textContains='Multi Sound')
         if not row.exists(timeout=2):
             row = d(textContains='Multi sound')
         if not row.exists(timeout=2):
@@ -5851,15 +5853,12 @@ def _enable_multi_audio_focus(udid):
 
     try:
         import base64
-        # Sound Assistant only helps on OneUI 5+/Android 12+; Android 10/11 use DEX direct.
-        if api_level is None or api_level >= 31:
-            try:
-                d = ua.connect(udid)
-                _ensure_sound_assistant_multisound(d, udid)
-            except Exception as e:
-                add_log("WARN", udid, f"[MultiApp] Sound Assistant pre-step skipped: {e}")
-        else:
-            add_log("INFO", udid, "[MultiApp] Android <12: skipping Sound Assistant (DEX direct)")
+        # SoundAssistant 3.5.14.1 (minAPI28) works on Android 10+; enable Multi Sound before DEX.
+        try:
+            d = ua.connect(udid)
+            _ensure_sound_assistant_multisound(d, udid)
+        except Exception as e:
+            add_log("WARN", udid, f"[MultiApp] Sound Assistant pre-step skipped: {e}")
 
         dex_data = base64.b64decode(_MULTI_AUDIO_DEX_B64)
         tmp_dex = os.path.join(os.environ.get('TEMP', os.path.dirname(__file__)), '_multi_focus.dex')
