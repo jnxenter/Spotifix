@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.6"
+Bot_version = "4.1.7"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5724,7 +5724,12 @@ def _sound_assistant_apk_path():
 
 
 _SA_PERM_TEXTS = ('Sí, continuar', 'Allow', 'Permitir', 'Yes', 'OK', 'Aceptar', 'Accept',
-                  'Continuar', 'Continue', 'Permitir siempre', 'Allow always', 'Abrir', 'Open')
+                  'Continuar', 'Continue', 'Permitir siempre', 'Allow always', 'Abrir', 'Open',
+                  'SELECT APPS', 'Select Apps', 'select apps', 'SELECCIONAR', 'Seleccionar apps',
+                  'Seleccionar', 'Elegir aplicaciones', 'CHOOSE APPS')
+
+_SA_MULTI_TERMS = ('multisonido', 'multisound', 'multi sound', 'multi-sound',
+                   'sonido múltiple', 'sonido multipl')
 
 
 def _tap_sa_permissions(d, udid):
@@ -5758,7 +5763,8 @@ def _select_all_sa_apps(d, udid):
                 continue
             low = xml.lower()
             # on the app picker screen: look for rows with app names
-            has_screen = ('spotify' in low or 'apple' in low or 'tidal' in low or 'seleccion' in low or 'select' in low)
+            has_screen = ('spotify' in low or 'apple' in low or 'tidal' in low or 'seleccion' in low or
+                          'select' in low or 'applica' in low or 'aplicacion' in low or 'all apps' in low)
             if not has_screen and attempt < 3:
                 # maybe panel main screen; tap the Multisound row again or search icon
                 _human_delay(1.5, 2.5)
@@ -5856,7 +5862,7 @@ def _ensure_sound_assistant_multisound(d, udid):
                 low = xml.lower()
             except Exception:
                 low = ''
-            if any(p in low for p in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl')):
+            if any(p in low for p in _SA_MULTI_TERMS):
                 break
             tapped = False
             for txt in ('Empezar', 'Get Started', 'Empezar ahora', 'Siguiente', 'Next', 'Continuar', 'Continue',
@@ -5886,7 +5892,7 @@ def _ensure_sound_assistant_multisound(d, udid):
         except Exception:
             low = ''
         target = None
-        for pat in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl'):
+        for pat in _SA_MULTI_TERMS:
             if pat in low:
                 target = pat
                 break
@@ -5908,7 +5914,7 @@ def _ensure_sound_assistant_multisound(d, udid):
                 low = xml.lower()
             except Exception:
                 low = ''
-            if not any(p in low for p in ('multisound', 'multi sound', 'multi-sound', 'sonido múltiple', 'sonido multipl')):
+            if not any(p in low for p in _SA_MULTI_TERMS):
                 texts = _re.findall(r'text="([^"]{2,50})"', xml or '')
                 for t in texts[:15]:
                     if t.strip():
@@ -5933,7 +5939,9 @@ def _ensure_sound_assistant_multisound(d, udid):
                 return True
 
         # click the row
-        row = d(textContains='Multisound')
+        row = d(textContains='Multisonido')
+        if not row.exists(timeout=2):
+            row = d(textContains='Multisound')
         if not row.exists(timeout=2):
             row = d(textContains='Multi Sound')
         if not row.exists(timeout=2):
@@ -5943,6 +5951,22 @@ def _ensure_sound_assistant_multisound(d, udid):
         if row.exists(timeout=2):
             row.click()
             _human_delay(2.0, 4.0)
+            _tap_sa_permissions(d, udid)
+
+            # Android 9-11: after enabling Multisound a 'select apps' prompt appears -> accept it
+            try:
+                xml2 = d.dump_hierarchy(False)
+                low2 = xml2.lower()
+            except Exception:
+                low2 = ''
+            if any(p in low2 for p in ('select apps', 'seleccionar apps', 'elegir aplicaciones', 'seleccionar', 'choose apps')):
+                for txt in ('OK', 'Aceptar', 'Accept', 'Allow', 'Permitir', 'Siguiente', 'Next', 'Continue', 'Continuar', 'Seleccionar', 'Select'):
+                    el = d(text=txt)
+                    if el.exists(timeout=1):
+                        el.click()
+                        add_log("INFO", udid, f"[MultiApp] SA 'select apps' accepted ({txt})")
+                        _human_delay(1.5, 3.0)
+                        break
             _tap_sa_permissions(d, udid)
 
             # toggle switch ON if present
