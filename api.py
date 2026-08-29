@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.5.0"
+Bot_version = "4.6.0"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -264,6 +264,7 @@ config_validate_proxy = False
 
 proxy_blocked_devices = set()
 _multi_sound_ok_devices = set()
+_multi_sound_bad_devices = set()
 
 settings_capsolver_api_key = None
 
@@ -1546,8 +1547,8 @@ def device_android_versions():
                 'model': model,
                 'api': api_int,
                 'android_release': release,
-                'android_display': (f"Android {release} (API {api_int})" if release and api_int else
-                                    (release or api or 'desconocido'))
+                'android_display': (f"Android {release}" if release else
+                                    (f"Android (API {api_int})" if api_int else 'desconocido'))
             })
         devices.sort(key=lambda x: x['panda'])
         return jsonify({'devices': devices}), 200
@@ -6227,8 +6228,25 @@ def _enable_multi_audio_focus(udid):
                 return True
             if b'BEFORE isMultiSoundOn -> false' in stdout_out and b'AFTER isMultiSoundOn -> false' in stdout_out:
                 add_log("WARN", udid, "[MultiApp] isMultiSoundOn stuck false: Sound Assistant needed or non-Samsung ROM (single-app mode for this phone)")
+                _multi_sound_bad_devices.add(udid)
                 return True
-            add_log("WARN", udid, "[MultiApp] Multi Audio Focus call made but state still reported off (may be enabled anyway)")
+            # DEX ran but state still "off" in dumpsys (common on OneUI 6/7 where the
+            # dumpsys flag is legacy). Classify by hardware: OneUI (Samsung, API>=31)
+            # supports real Multi Sound after the DEX; non-Samsung or old API does not.
+            add_log("WARN", udid, "[MultiApp] Multi Audio Focus call made but state still reported off; classifying device...")
+            try:
+                api_hint = _device_android_api(udid)
+                manu = (get_device_manufacturer(udid) or '').lower()
+                model = (get_device_model(udid) or '')
+                if api_hint is not None and api_hint >= 31 and ('samsung' in manu or model.startswith('SM-')):
+                    add_log("SUCC", udid, "[MultiApp] OneUI device (Samsung API>=31): assuming Multi Sound works (legacy flag off)")
+                    _multi_sound_ok_devices.add(udid)
+                else:
+                    add_log("WARN", udid, "[MultiApp] Non-Samsung or old API: single-app mode for this phone")
+                    _multi_sound_bad_devices.add(udid)
+            except Exception as e:
+                add_log("ERR.", udid, f"[MultiApp] Failed to classify device: {e}")
+                _multi_sound_bad_devices.add(udid)
             return True
     except Exception as e:
         add_log("ERR.", udid, f"[MultiApp] Failed to enable Multi Audio Focus: {e}")
@@ -7609,7 +7627,12 @@ def main_function(config_data):
 
         # If this phone does NOT have real Multi Sound (isMultiSoundOn stuck false),
         # running 2+ apps just leaves others STOPPED. Force single app = Spotify.
-        if len(installed_selected) > 1 and udid not in _multi_sound_ok_devices:
+        # IMPORTANT: run the DEX probe FIRST (once per device) so the first pass has
+        # the real OK/BAD classification instead of an empty set.
+        if len(installed_selected) > 1 and udid not in _multi_sound_ok_devices and udid not in _multi_sound_bad_devices:
+            add_log("INFO", udid, f"[MultiApp] No MultiSound classification yet for {udid}; probing now...")
+            _enable_multi_audio_focus(udid)
+        if len(installed_selected) > 1 and udid in _multi_sound_bad_devices:
             if 'spotify' in installed_selected:
                 add_log("WARN", udid, f"[MultiApp] No real MultiSound detected on this device; running Spotify only ({installed_selected} -> ['spotify'])")
                 installed_selected = ['spotify']
