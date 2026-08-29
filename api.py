@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.0.3"
+Bot_version = "4.0.4"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -4694,7 +4694,7 @@ def _dismiss_any_banner(d, udid, display_name='Apple Music'):
                     clicked = True
                     add_log("INFO", udid, f"[{display_name}] Tapped close control '{pat}' ({attempt+1})")
                     break
-                el2 = d(resourceIdContains=pat)
+                el2 = d(resourceIdMatches=f'.*{pat}.*')
                 if el2.exists(timeout=1):
                     el2.click()
                     clicked = True
