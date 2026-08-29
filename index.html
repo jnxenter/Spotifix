@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SpotiFix 4.1.9</title>
+    <title>SpotiFix 4.5.0</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/moment@2.29.1/moment.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment@1.0.0"></script>
@@ -723,6 +723,8 @@
         #threadsTable { font-size: 1.05em; width: 100%; table-layout: auto; }
         #threadsTable th, #threadsTable td { padding: 8px 6px; white-space: nowrap; }
         #threadsTable th:nth-child(1), #threadsTable td:nth-child(1) { font-size: 1em; }
+        .version-table { font-size: 1em; width: 100%; }
+        .version-table th, .version-table td { padding: 8px 6px; white-space: nowrap; text-align: left; }
         #threadsTable th:nth-child(2), #threadsTable td:nth-child(2) { font-size: 1em; }
         #threadsTable th:nth-child(3), #threadsTable td:nth-child(3) { font-size: 1em; }
         #threadsTable th:nth-child(n+4), #threadsTable td:nth-child(n+4) { font-size: 0.95em; text-align: center; }
@@ -1043,7 +1045,7 @@
 <div class="title-bar">
     <div class="background-image"></div>
     <div class="title">
-        <span style="margin-left: 10px;">Spotifix 4.1.9</span>
+        <span style="margin-left: 10px;">Spotifix 4.5.0</span>
     </div>
     <div class="title-bar-buttons" style="display: flex; align-items: center;">
         <button id="minimize-btn">
@@ -1454,6 +1456,13 @@
             </form>
         </div>
         <div class="card card-large">
+            <h2>Versiones Android (en vivo)</h2>
+            <p class="login-help">Se actualiza automáticamente cada 10 segundos. Muestra la versión de Android
+                (API) de cada teléfono con numeración Panda, para que decidas qué Sound Assistant instalar:
+                <b>9-11</b> o <b>12-14</b>.</p>
+            <div id="androidVersionsTable" style="margin-top: 0.5rem; overflow-x:auto;"></div>
+        </div>
+        <div class="card card-large">
             <h2>Install Apps</h2>
             <p class="login-help">Instala APKs en teléfonos seleccionados. Se aceptan varios modos de numeración,
                 por ejemplo: <code>del 1 al 34</code>, <code>1-34</code>, <code>1,3,5,7</code>,
@@ -1472,6 +1481,12 @@
                 <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
                     <input type="checkbox" id="installAppleCheck" checked> Apple Music
                 </label>
+                <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                    <input type="checkbox" id="installSA911Check"> Sound Assistant 9-11
+                </label>
+                <label style="display:flex; align-items:center; gap:0.4rem; cursor:pointer;">
+                    <input type="checkbox" id="installSA1214Check"> Sound Assistant 12-14
+                </label>
             </div>
             <div class="form-group">
                 <button id="installAppsButton" class="boton-elegante">Instalar en seleccionados</button>
@@ -1480,7 +1495,7 @@
         </div>
         <div class="card card-large">
             <h2>Update</h2>
-            <p class="login-help" id="updateCurrentVersion">Current version: 4.1.9</p>
+            <p class="login-help" id="updateCurrentVersion">Current version: 4.5.0</p>
             <div id="updateStatus" style="margin-bottom: 1rem; min-height: 24px;"></div>
             <div class="form-group">
                 <button id="checkUpdateButton" class="boton-elegante">Check for Updates</button>
