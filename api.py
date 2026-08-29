@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.1.7"
+Bot_version = "4.1.8"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -5732,6 +5732,27 @@ _SA_MULTI_TERMS = ('multisonido', 'multisound', 'multi sound', 'multi-sound',
                    'sonido múltiple', 'sonido multipl')
 
 
+def _sa_scroll_for_terms(d, udid):
+    """Scroll down the Sound Assistant main list until a multisound term appears (max 5 swipes)."""
+    import re as _re2
+    try:
+        for i in range(5):
+            xml = ''
+            try:
+                xml = d.dump_hierarchy(False)
+            except Exception:
+                pass
+            if any(p in xml.lower() for p in _SA_MULTI_TERMS):
+                return True
+            # swipe up to reveal lower items
+            h = d.info.get('displayHeight', 0) or 1600
+            d.swipe(540, int(h * 0.75), 540, int(h * 0.35), duration=0.3)
+            _human_delay(0.8, 1.5)
+        return any(p in (d.dump_hierarchy(False) or b'').decode('utf-8', 'replace').lower() for p in _SA_MULTI_TERMS)
+    except Exception:
+        return False
+
+
 def _tap_sa_permissions(d, udid):
     """Accept any permission dialog/popup that Sound Assistant may show (ignoring 'no' options)."""
     try:
@@ -5884,6 +5905,16 @@ def _ensure_sound_assistant_multisound(d, udid):
                 _human_delay(1.5, 3.0)
                 continue
             break
+
+        # Scroll the SA main list to reveal Multisound/Multisonido (it sits below the fold)
+        if not any(p in low for p in _SA_MULTI_TERMS):
+            if _sa_scroll_for_terms(d, udid):
+                add_log("INFO", udid, "[MultiApp] Multisound row revealed after scrolling")
+            try:
+                xml = d.dump_hierarchy(False)
+                low = xml.lower()
+            except Exception:
+                low = ''
 
         # Rebuild: if still no Multisound, log the visible texts for debugging
         try:
