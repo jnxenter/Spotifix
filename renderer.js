@@ -945,6 +945,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (document.getElementById('apple-search-links-perc'))
                     document.getElementById('apple-search-links-perc').value = config.apple_search_links_perc || 0;
                 document.getElementById('session-time').value = config.session_time;
+                document.getElementById('validate-proxy').checked = config.validate_proxy || false;
                 document.getElementById('use-webhook').checked = config.webhook.use;
                 document.getElementById('webhook-name').value = config.webhook.name;
                 document.getElementById('webhook-url').value = config.webhook.url;
@@ -1294,26 +1295,12 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             refreshChatStatus();
 
-            // ---- Timer ----
+            // ---- Timer per-app ----
             (function() {
                 const tzSelect = document.getElementById('timerTimezone');
-                const stopHourSel = document.getElementById('timerStopHour');
-                const stopMinSel = document.getElementById('timerStopMin');
-                const stopAmpmSel = document.getElementById('timerStopAmpm');
-                const enabledCheck = document.getElementById('timerEnabled');
-                const saveBtn = document.getElementById('timerSaveBtn');
-                const cancelBtn = document.getElementById('timerCancelBtn');
-                const statusDiv = document.getElementById('timerStatus');
-                const logDiv = document.getElementById('timerLog');
                 const clockSpan = document.getElementById('timerCurrentClock');
-                const startHourSel = document.getElementById('timerStartHour');
-                const startMinSel = document.getElementById('timerStartMin');
-                const startAmpmSel = document.getElementById('timerStartAmpm');
-                const startEnabledCheck = document.getElementById('timerStartEnabled');
-                const startSaveBtn = document.getElementById('timerStartSaveBtn');
-                const startCancelBtn = document.getElementById('timerStartCancelBtn');
-                const startStatusDiv = document.getElementById('timerStartStatus');
-                if (!saveBtn && !startSaveBtn) return;
+                const logDiv = document.getElementById('timerLog');
+                if (!tzSelect) return;
 
                 function to12(h24) {
                     h24 = parseInt(h24, 10);
@@ -1341,86 +1328,95 @@ document.addEventListener('DOMContentLoaded', () => {
                     logDiv.scrollTop = 0;
                 }
 
+                function setAllTimezones(tz) {
+                    document.querySelectorAll('#timerTimezone').forEach(sel => {
+                        if (sel.value !== tz) sel.value = tz;
+                    });
+                }
+
                 var _timerFirstLoad = true;
                 function loadTimerState() {
                     fetch('http://localhost:8999/get_timer', { headers: { 'Authorization': 'Bearer ' + authToken } })
                     .then(r => r.json())
                     .then(d => {
-                        if (_timerFirstLoad) {
-                            if (tzSelect) tzSelect.value = d.timezone || 'America/Mexico_City';
-                            if (d.stop_hour !== undefined) {
-                                var t12 = to12(d.stop_hour);
-                                if (stopHourSel) stopHourSel.value = t12.h;
-                                if (stopMinSel) stopMinSel.value = String(d.stop_minute || 0).padStart(2, '0');
-                                if (stopAmpmSel) stopAmpmSel.value = t12.ampm;
-                            }
-                            if (d.start_hour !== undefined) {
-                                var s12 = to12(d.start_hour);
-                                if (startHourSel) startHourSel.value = s12.h;
-                                if (startMinSel) startMinSel.value = String(d.start_minute || 0).padStart(2, '0');
-                                if (startAmpmSel) startAmpmSel.value = s12.ampm;
-                            }
-                            _timerFirstLoad = false;
-                        }
-                        if (d.enabled) {
-                            statusDiv.innerHTML = '<span style="color:#5dade2;">Temporizador activo — se detiene a las ' + d.stop_hour + ':' + String(d.stop_minute || 0).padStart(2, '0') + '</span>';
-                        } else if (d.triggered) {
-                            statusDiv.innerHTML = '<span style="color:#e74c3c;">Temporizador ejecutado — bot detenido.</span>';
-                        } else {
-                            statusDiv.innerHTML = '<span style="color:#888;">Sin temporizador de parada activo.</span>';
-                        }
-                        if (d.start_enabled) {
-                            startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador activo — inicia a las ' + d.start_hour + ':' + String(d.start_minute || 0).padStart(2, '0') + '</span>';
-                        } else if (d.start_triggered) {
-                            startStatusDiv.innerHTML = '<span style="color:#2ecc71;">Temporizador ejecutado — bot iniciado.</span>';
-                        } else {
-                            startStatusDiv.innerHTML = '<span style="color:#888;">Sin temporizador de inicio activo.</span>';
-                        }
+                        if (d.timezone) tzSelect.value = d.timezone;
+                        var apps = d.timers || {};
+                        ['all', 'spotify', 'tidal', 'apple'].forEach(ak => {
+                            var info = apps[ak] || {};
+                            ['start', 'stop'].forEach(action => {
+                                var hourSel = document.querySelector('.timer-hour[data-app="'+ak+'"][data-action="'+action+'"]');
+                                var minSel = document.querySelector('.timer-min[data-app="'+ak+'"][data-action="'+action+'"]');
+                                var ampmSel = document.querySelector('.timer-ampm[data-app="'+ak+'"][data-action="'+action+'"]');
+                                var statusDiv = document.querySelector('.timer-status[data-app="'+ak+'"][data-action="'+action+'"]');
+                                var enabledKey = action + '_enabled';
+                                var triggeredKey = action + '_triggered';
+                                var hourKey = action + '_hour';
+                                var minKey = action + '_minute';
+                                var actLabel = action === 'start' ? (ak === 'all' ? 'inicia el bot' : 'reanuda ' + ak) : (ak === 'all' ? 'detiene el bot' : 'pausa ' + ak);
+                                if (_timerFirstLoad && info[hourKey] !== undefined) {
+                                    var t12 = to12(info[hourKey]);
+                                    if (hourSel) hourSel.value = t12.h;
+                                    if (minSel) minSel.value = String(info[minKey] || 0).padStart(2, '0');
+                                    if (ampmSel) ampmSel.value = t12.ampm;
+                                }
+                                if (statusDiv) {
+                                    if (info[enabledKey]) {
+                                        var hDisp = to12(info[hourKey]);
+                                        statusDiv.innerHTML = '<span style="color:#2ecc71;">Activo — ' + actLabel + ' a las ' + hDisp.h + ':' + String(info[minKey] || 0).padStart(2, '0') + ' ' + hDisp.ampm + '</span>';
+                                    } else if (info[triggeredKey]) {
+                                        statusDiv.innerHTML = '<span style="color:#e74c3c;">Ejecutado</span>';
+                                    } else {
+                                        statusDiv.innerHTML = '<span style="color:#888;">Sin temporizador activo.</span>';
+                                    }
+                                }
+                            });
+                        });
+                        _timerFirstLoad = false;
                         renderTimerLog(d.log);
                     }).catch(() => {});
                 }
 
-                if (saveBtn) saveBtn.addEventListener('click', () => {
-                    var h24 = to24(stopHourSel.value, stopAmpmSel.value);
-                    var mm = stopMinSel.value;
-                    fetch('http://localhost:8999/set_timer', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-                        body: JSON.stringify({ enabled: true, timezone: tzSelect.value, stop_time: String(h24).padStart(2, '0') + ':' + mm })
-                    })
-                    .then(r => r.json())
-                    .then(d => { if (d.success) loadTimerState(); else statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
-                    .catch(err => { statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + err.message + '</span>'; });
+                document.querySelectorAll('.timer-save-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        var ak = btn.dataset.app;
+                        var action = btn.dataset.action;
+                        var hourSel = document.querySelector('.timer-hour[data-app="'+ak+'"][data-action="'+action+'"]');
+                        var minSel = document.querySelector('.timer-min[data-app="'+ak+'"][data-action="'+action+'"]');
+                        var ampmSel = document.querySelector('.timer-ampm[data-app="'+ak+'"][data-action="'+action+'"]');
+                        var statusDiv = document.querySelector('.timer-status[data-app="'+ak+'"][data-action="'+action+'"]');
+                        var h24 = to24(hourSel.value, ampmSel.value);
+                        var mm = minSel.value;
+                        fetch('http://localhost:8999/set_timer', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                            body: JSON.stringify({ app_key: ak, action: action, enabled: true, timezone: tzSelect.value, time: String(h24).padStart(2, '0') + ':' + mm })
+                        })
+                        .then(r => r.json())
+                        .then(d => { if (d.success) loadTimerState(); else statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
+                        .catch(err => { statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + err.message + '</span>'; });
+                    });
                 });
 
-                if (cancelBtn) cancelBtn.addEventListener('click', () => {
-                    fetch('http://localhost:8999/cancel_timer', { method: 'POST', headers: { 'Authorization': 'Bearer ' + authToken } })
-                    .then(r => r.json()).then(() => loadTimerState()).catch(() => {});
-                });
-
-                if (startSaveBtn) startSaveBtn.addEventListener('click', () => {
-                    var h24 = to24(startHourSel.value, startAmpmSel.value);
-                    var mm = startMinSel.value;
-                    fetch('http://localhost:8999/set_start_timer', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-                        body: JSON.stringify({ enabled: true, start_time: String(h24).padStart(2, '0') + ':' + mm })
-                    })
-                    .then(r => r.json())
-                    .then(d => { if (d.success) loadTimerState(); else startStatusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })
-                    .catch(err => { startStatusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + err.message + '</span>'; });
-                });
-
-                if (startCancelBtn) startCancelBtn.addEventListener('click', () => {
-                    fetch('http://localhost:8999/cancel_start_timer', { method: 'POST', headers: { 'Authorization': 'Bearer ' + authToken } })
-                    .then(r => r.json()).then(() => loadTimerState()).catch(() => {});
+                document.querySelectorAll('.timer-cancel-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        var ak = btn.dataset.app;
+                        var action = btn.dataset.action;
+                        var statusDiv = document.querySelector('.timer-status[data-app="'+ak+'"][data-action="'+action+'"]');
+                        fetch('http://localhost:8999/cancel_timer', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                            body: JSON.stringify({ app_key: ak, action: action })
+                        })
+                        .then(r => r.json())
+                        .then(() => loadTimerState())
+                        .catch(() => { statusDiv.innerHTML = '<span style="color:#e74c3c;">Error al cancelar</span>'; });
+                    });
                 });
 
                 setInterval(() => {
-                    const tz = tzSelect ? tzSelect.value : 'America/Mexico_City';
                     try {
-                        const now = new Date();
-                        const str = now.toLocaleTimeString('en-US', { timeZone: tz, hour12: true });
+                        var now = new Date();
+                        var str = now.toLocaleTimeString('en-US', { timeZone: tzSelect.value, hour12: true });
                         if (clockSpan) clockSpan.textContent = str;
                     } catch (e) {
                         if (clockSpan) clockSpan.textContent = new Date().toLocaleTimeString('en-US', { hour12: true });
@@ -1567,6 +1563,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     apple_shuffle_perc: document.getElementById('apple-shuffle-perc') ? document.getElementById('apple-shuffle-perc').value : 0,
                     apple_search_links_perc: document.getElementById('apple-search-links-perc') ? document.getElementById('apple-search-links-perc').value : 0,
                     session_time: document.getElementById('session-time').value,
+                    validate_proxy: document.getElementById('validate-proxy').checked,
                     selected_apps: selectedApps,
                     webhook: {
                         use: document.getElementById('use-webhook').checked,
