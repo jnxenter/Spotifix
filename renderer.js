@@ -1654,7 +1654,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (statsIntervalId) clearInterval(statsIntervalId);
                             statsIntervalId = setInterval(fetchWorkerStats, 5000);
                             fetchDashboard();
-                            setInterval(fetchDashboard, 8000);
+                            setInterval(fetchDashboard, 10000);
                             toggleStartStopButton();
                             startTimer();
                         }
@@ -1752,7 +1752,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 if (statsIntervalId) clearInterval(statsIntervalId);
                                 statsIntervalId = setInterval(fetchWorkerStats, 5000);
                                 fetchDashboard();
-                                setInterval(fetchDashboard, 8000);
+                                setInterval(fetchDashboard, 10000);
                                 startTimer();
                             } else if (!data.bot_running && btn.textContent === 'Stop') {
                                 toggleStartStopButton();
