@@ -6779,6 +6779,22 @@ def _check_super_proxy_ui(udid):
     return False
 
 
+def _wait_proxy_connected(udid, max_wait=35, interval=5):
+    """Wait (polling) until the Super Proxy VPN turns RED (connected). During a
+    mass 15-phone bootstrap the VPN can take 15-30s to establish; a single short
+    sleep + repeated re-taps just reset the connection and it never links. So we
+    tap once, then wait patiently for the state to become connected."""
+    waited = 0
+    while waited < max_wait:
+        if _stop_requested(udid):
+            return False
+        if _check_super_proxy_ui(udid):
+            return True
+        time.sleep(interval)
+        waited += interval
+    return False
+
+
 def _tap_super_proxy_start(udid):
     _ensure_super_proxy_detail(udid)
     color, pos = _screenshot_button_color(udid)
@@ -6859,30 +6875,19 @@ def _validate_device_proxy(udid, proxy, connection_type):
             time.sleep(2)
             continue
         add_log("WARN", udid, f"[Proxy] VALIDATION {vround}/4: NOT connected, attempting to start...")
-        rectified = False
-        for attempt in range(1, 6):
-            if _stop_requested(udid):
-                return False
-            _open_super_proxy(udid)
-            time.sleep(1)
-            _tap_super_proxy_start(udid)
-            time.sleep(5)
-            if _check_super_proxy_ui(udid):
-                connected_rounds += 1
-                add_log("SUCC", udid, f"[Proxy] RECTIFIED on attempt {attempt} (round {vround}/4, {connected_rounds}/4 rounds ok)")
-                rectified = True
-                time.sleep(2)
-                break
-            add_log("WARN", udid, f"[Proxy] Rectify attempt {attempt}/5 (round {vround}/4) failed, retrying...")
-            time.sleep(2)
-        if not rectified:
-            msg = f"Super Proxy FAILED the {vround}/4 validation round (could NOT connect within 5 attempts) on device {udid}. Device will be skipped."
-            _send_proxy_alert(udid, proxy, msg)
-            proxy_blocked_devices.add(udid)
-            add_log("ERR.", udid, "[Proxy] Validation failed. Skipping device.")
-            return False
+        _open_super_proxy(udid)
+        time.sleep(1)
+        # Tap once and wait patiently for the VPN to turn RED (connected). Do NOT
+        # repeatedly re-tap: that cancels an in-progress connection and the VPN
+        # never finishes establishing (especially when 15 phones connect at once).
+        _tap_super_proxy_start(udid)
+        if _wait_proxy_connected(udid, max_wait=35, interval=5):
+            connected_rounds += 1
+            add_log("SUCC", udid, f"[Proxy] RECTIFIED (round {vround}/4, {connected_rounds}/4 rounds ok)")
+        else:
+            add_log("WARN", udid, f"[Proxy] Round {vround}/4 could NOT connect within wait window; continuing.")
 
-    if connected_rounds >= 4:
+    if connected_rounds >= 3:
         add_log("SUCC", udid, f"[Proxy] Validated CONNECTED in {connected_rounds}/4 rounds. Proceeding to launch apps.")
         return True
     add_log("ERR.", udid, f"[Proxy] Only {connected_rounds}/4 rounds connected. Failing validation.")
@@ -6898,21 +6903,14 @@ def _recheck_device_proxy(udid, proxy, connection_type):
             add_log("SUCC", udid, f"[Proxy] RECHECK {rcheck_round}/2: CONNECTED")
             return True
         add_log("WARN", udid, f"[Proxy] RECHECK {rcheck_round}/2: NOT connected, attempting to start...")
-        rectified = False
-        for attempt in range(1, 6):
-            _open_super_proxy(udid)
-            time.sleep(1)
-            _tap_super_proxy_start(udid)
-            time.sleep(5)
-            if _check_super_proxy_ui(udid):
-                add_log("SUCC", udid, f"[Proxy] RECHECK reconnected on attempt {attempt} (round {rcheck_round}/2)")
-                rectified = True
-                break
-            add_log("WARN", udid, f"[Proxy] Recheck attempt {attempt}/5 (round {rcheck_round}/2) failed, retrying...")
-            time.sleep(2)
-        if rectified:
+        _open_super_proxy(udid)
+        time.sleep(1)
+        _tap_super_proxy_start(udid)
+        if _wait_proxy_connected(udid, max_wait=30, interval=5):
+            add_log("SUCC", udid, "[Proxy] RECHECK reconnected (proxy came back to RED)")
             return True
-    msg = f"Super Proxy DISCONNECTED and failed to reconnect after 2 rounds (5 attempts each) on device {udid}. Device stopped."
+        add_log("WARN", udid, "[Proxy] Recheck could not reconnect within wait window.")
+    msg = f"Super Proxy DISCONNECTED and failed to reconnect after 2 rounds on device {udid}. Device stopped."
     _send_proxy_alert(udid, proxy, msg)
     proxy_blocked_devices.add(udid)
     apps_to_close = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
