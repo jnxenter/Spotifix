@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.6"
+Bot_version = "4.6.7"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -6476,23 +6476,57 @@ def _send_proxy_alert(udid, proxy, message):
 
 
 def _is_vpn_active(udid):
+    # En estos dispositivos `dumpsys vpn` NO existe ("Can't find service: vpn").
+    # La fuente fiable es `dumpsys connectivity`, que muestra el bloque VPN real
+    # (VPN CONNECTED + OwnerUid/sessionId). Se verifica que el VPN conectado es
+    # realmente el de Super Proxy (por uid del paquete) para no confundirlo con
+    # otro VPN (p.ej. surfshark) instalado en el telefono.
     try:
-        result = subprocess.run(
-            [adb_path, '-s', udid, 'shell', 'dumpsys', 'vpn'],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, startupinfo=startupinfo
-        )
-        output = result.stdout.lower()
-        if 'com.scheler.superproxy' in output and ('connected' in output or 'established' in output):
-            return True
-        if 'active vpn' in output and 'com.scheler.superproxy' in output:
-            return True
+        uid = None
+        try:
+            pu = subprocess.run(
+                [adb_path, '-s', udid, 'shell', 'dumpsys', 'package', 'com.scheler.superproxy'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, startupinfo=startupinfo
+            )
+            m = re.search(r'userId=(\d+)', pu.stdout)
+            if m:
+                uid = m.group(1)
+        except:
+            uid = None
+
+        for service in (['dumpsys', 'connectivity'], ['dumpsys', 'vpn']):
+            try:
+                result = subprocess.run(
+                    [adb_path, '-s', udid, 'shell'] + service,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10, startupinfo=startupinfo
+                )
+                output = result.stdout.lower()
+                if not output:
+                    continue
+                if 'com.scheler.superproxy' in output and ('connected' in output or 'established' in output):
+                    return True
+                if 'active vpn' in output and 'com.scheler.superproxy' in output:
+                    return True
+                if 'vpn connected' in output:
+                    if uid and f'owneruid: {uid}' in output:
+                        return True
+                    if 'com.scheler.superproxy' in output:
+                        return True
+                    if 'sessionid=proxy' in output:
+                        return True
+            except:
+                continue
         return False
     except:
         return False
 
 
 def _open_super_proxy(udid):
+    # Si la app ya esta al frente, no relanzar ni esperar (para no frenar bucles
+    # de polling que llaman a _check_super_proxy_ui cada pocos segundos).
     try:
+        if _is_super_proxy_foreground(udid):
+            return True
         subprocess.run(
             [adb_path, '-s', udid, 'shell', 'am', 'start', '-n', SUPER_PROXY_ACTIVITY],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, startupinfo=startupinfo
@@ -6763,12 +6797,17 @@ def _ensure_super_proxy_detail(udid):
 
 
 def _check_super_proxy_ui(udid):
-    # Conectado se decide de forma FIABLE por content-desc del boton real via
-    # uiautomator (Stop/Running/Disconnect = conectado/rojo, Start/Connect =
-    # desconectado/verde) y por dumpsys vpn. NO se usa el color de pixeles: se
-    # confundia con la barra de tabs y daba resultados erroneos.
+    # Primero se verifica el estado real del VPN por el sistema (dumpsys
+    # connectivity), que es la fuente FIABLE. Si el sistema dice CONECTADO,
+    # se retorna True inmediatamente sin depender de la UI (que en apps
+    # Flutter como Super Proxy puede mostrar content-desc desactualizado,
+    # p.ej. "Start" cuando realmente esta conectado en rojo).
+    # Solo si el sistema dice NO conectado, se abre la app y se valida por
+    # el boton real de la UI como paso adicional.
     if _is_vpn_active(udid):
         return True
+    _open_super_proxy(udid)
+    time.sleep(1)
     xml = _dump_super_proxy_ui(udid)
     if xml:
         if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
@@ -6796,11 +6835,14 @@ def _wait_proxy_connected(udid, max_wait=35, interval=5):
 
 def _tap_super_proxy_start(udid):
     # REGLA DE ORO: el boton en ROJO = CONECTADO = JAMAS se toca. Solo se toca
-    # si esta VERDE = DESCONECTADO. Localizamos el boton real por su content-desc
-    # via uiautomator (exacto y fiable), NO por color de pixeles (que se confundia
-    # con la barra de tabs verde y tocaba el punto equivocado).
+    # si esta VERDE "Start" = DESCONECTADO. Se entra siempre a la app y se
+    # localiza el boton real por su content-desc via uiautomator (exacto y
+    # fiable), NO por color de pixeles. Si la UI no confirma ningun boton, se
+    # usa dumpsys como respaldo pero NUNCA se toca nada a ciegas.
     if _is_vpn_active(udid):
         return True
+    _open_super_proxy(udid)
+    time.sleep(1)
     xml = _dump_super_proxy_ui(udid)
     if not xml:
         add_log("WARN", udid, "[Proxy] No Super Proxy UI dump; not touching toggle.")
@@ -6842,29 +6884,26 @@ def _validate_device_proxy(udid, proxy, connection_type):
             time.sleep(2)
             continue
         add_log("WARN", udid, f"[Proxy] VALIDATION {vround}/4: NOT connected, attempting to start...")
-        # Intenta conectar tocando SOLO el boton START real (verde) via content-desc.
-        # El tap NUNCA toca el STOP (rojo/conectado). Reintenta en espacio de rondas.
+        # Toca SOLO el boton START real (verde) via content-desc (nunca el STOP/rojo).
+        # IMPORTANTE: un solo tap y esperar PACIENTE (hasta 40s). No percutar de
+        # forma agresiva: cada re-tap cancela la conexion en curso del proxy y esta
+        # nunca llega a establecerse (sobre todo cuando 15 telos conectan a la vez).
         rectified = False
-        for attempt in range(1, 6):
+        for attempt in range(1, 3):
             if _stop_requested(udid):
                 return False
             _open_super_proxy(udid)
-            time.sleep(1)
-            if _check_super_proxy_ui(udid):
-                connected_rounds += 1
-                add_log("SUCC", udid, f"[Proxy] VALIDATION {vround}/4: already CONNECTED ({connected_rounds}/4 rounds ok)")
-                rectified = True
-                time.sleep(2)
-                break
+            time.sleep(2)
             if _tap_super_proxy_start(udid):
-                if _wait_proxy_connected(udid, max_wait=15, interval=3):
+                # Espera larga y paciente (40s) para que el proxy establezca.
+                if _wait_proxy_connected(udid, max_wait=40, interval=5):
                     connected_rounds += 1
                     add_log("SUCC", udid, f"[Proxy] RECTIFIED on attempt {attempt} (round {vround}/4, {connected_rounds}/4 rounds ok)")
                     rectified = True
                     time.sleep(2)
                     break
-            add_log("WARN", udid, f"[Proxy] Rectify attempt {attempt}/5 (round {vround}/4) could not connect; retrying...")
-            time.sleep(2)
+            add_log("WARN", udid, f"[Proxy] Rectify attempt {attempt}/2 (round {vround}/4) could not connect; one more try.")
+            time.sleep(3)
         if not rectified:
             add_log("WARN", udid, f"[Proxy] Round {vround}/4 could NOT connect; continuing to next round.")
 
