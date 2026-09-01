@@ -6794,24 +6794,43 @@ def _ensure_super_proxy_detail(udid):
     return False
 
 
+def _ensure_super_proxy_detail(udid, xml):
+    # Si estamos en la VISTA DE LISTA (no hay boton Start/Stop), buscar la
+    # tarjeta del proxy por su text (p.ej. "Proxy 03") y tocarla para entrar
+    # al detalle donde esta el boton Start/Stop.
+    if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect', 'Start', 'Connect']):
+        return xml
+    import re
+    proxy_card = re.compile(
+        r'text="(Proxy \d+)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        re.IGNORECASE)
+    m = proxy_card.search(xml)
+    if m:
+        x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        subprocess.run(
+            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(cx), str(cy)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+        )
+        add_log("INFO", udid, f"[Proxy] Tapped proxy card '{m.group(1)}' at ({cx},{cy}) to enter detail.")
+        time.sleep(2)
+        return _dump_super_proxy_ui(udid)
+    return xml
+
+
 def _check_super_proxy_ui(udid):
-    # Primero se verifica el estado real del VPN por el sistema (dumpsys
-    # connectivity), que es la fuente FIABLE. Si el sistema dice CONECTADO,
-    # se retorna True inmediatamente sin depender de la UI (que en apps
-    # Flutter como Super Proxy puede mostrar content-desc desactualizado,
-    # p.ej. "Start" cuando realmente esta conectado en rojo).
-    # Solo si el sistema dice NO conectado, se abre la app y se valida por
-    # el boton real de la UI como paso adicional.
-    if _is_vpn_active(udid):
-        return True
     _open_super_proxy(udid)
     time.sleep(1)
     xml = _dump_super_proxy_ui(udid)
-    if xml:
-        if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
-            return True
-        if _find_ui_button(xml, ['Start', 'Connect']):
-            return False
+    if not xml:
+        return False
+    xml = _ensure_super_proxy_detail(udid, xml)
+    if not xml:
+        return False
+    if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
+        return True
+    if _find_ui_button(xml, ['Start', 'Connect']):
+        return False
     return False
 
 
@@ -6832,21 +6851,20 @@ def _wait_proxy_connected(udid, max_wait=35, interval=5):
 
 
 def _tap_super_proxy_start(udid):
-    # La fuente de verdad es el SISTEMA (dumpsys connectivity). Si el sistema
-    # dice CONECTADO, NO se toca nada. Si el sistema dice DESCONECTADO, se toca
-    # el boton para activar. En Flutter el content-desc puede estar stale
-    # (muestra "Stop" cuando el VPN esta off), por eso se confia en el sistema
-    # y se toca el boton con cualquier content-desc que tenga (mismas coord).
-    if _is_vpn_active(udid):
-        return True
     _open_super_proxy(udid)
     time.sleep(1)
     xml = _dump_super_proxy_ui(udid)
     if not xml:
         add_log("WARN", udid, "[Proxy] No Super Proxy UI dump; not touching toggle.")
         return False
-    # Si el sistema dice DESCONECTADO, tocar el boton de toggle sin importar
-    # si el content-desc dice "Start" o "Stop" (puede estar stale en Flutter).
+    xml = _ensure_super_proxy_detail(udid, xml)
+    if not xml:
+        add_log("WARN", udid, "[Proxy] Could not enter proxy detail view; not touching.")
+        return False
+    stop_btn = _find_ui_button(xml, ['Stop', 'Running', 'Disconnect'])
+    if stop_btn:
+        add_log("INFO", udid, "[Proxy] Toggle is STOP/RED (connected) - does NOT touch it.")
+        return False
     start_btn = _find_ui_button(xml, ['Start', 'Connect'])
     if start_btn:
         subprocess.run(
@@ -6854,14 +6872,6 @@ def _tap_super_proxy_start(udid):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
         )
         add_log("INFO", udid, f"[Proxy] Tapped START/GREEN toggle at {start_btn} to CONNECT.")
-        return True
-    stop_btn = _find_ui_button(xml, ['Stop', 'Running', 'Disconnect'])
-    if stop_btn:
-        subprocess.run(
-            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(stop_btn[0]), str(stop_btn[1])],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-        )
-        add_log("INFO", udid, f"[Proxy] System says DISCONNECTED but UI shows stale Stop; tapped toggle at {stop_btn} to CONNECT.")
         return True
     add_log("WARN", udid, "[Proxy] Could not locate proxy toggle (no Stop/Start button found); not touching.")
     return False
