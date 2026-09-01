@@ -6796,9 +6796,11 @@ def _ensure_super_proxy_detail(udid):
 
 def _screencap_color_check(udid):
     """Take a screenshot and check the toggle button color area.
-    Returns ('colored', x, y) if colored button found (disconnected),
-    ('neutral', x, y) if neutral (connected), ('unknown', 0, 0) if cannot determine.
-    Also returns the center coordinates of the colored area for tapping."""
+    Returns ('disconnected', x, y) if green/blue button (Start = needs tap),
+    ('connected', x, y) if red/orange button (Stop = already active),
+    ('neutral', x, y) if white/black/gray (connected),
+    ('unknown', 0, 0) if cannot determine.
+    Returns the center coordinates of the colored area for tapping."""
     try:
         import tempfile, os
         from PIL import Image
@@ -6815,30 +6817,47 @@ def _screencap_color_check(udid):
         if not os.path.exists(local):
             return ('unknown', 0, 0)
         img = Image.open(local)
-        colored_xs = []
-        colored_ys = []
+        disconnected_xs = []
+        disconnected_ys = []
+        connected_xs = []
+        connected_ys = []
         neutral_count = 0
-        colored_count = 0
+        green_count = 0
+        red_count = 0
         for y in range(1490, 1680, 6):
             for x in range(40, 1040, 20):
                 r, g, b = img.getpixel((x, y))[:3]
                 mx = max(r, g, b)
                 mn = min(r, g, b)
                 if mx - mn > 40 and mx > 80:
-                    colored_count += 1
-                    colored_xs.append(x)
-                    colored_ys.append(y)
+                    if g > r + 20 and g > b + 10:
+                        green_count += 1
+                        disconnected_xs.append(x)
+                        disconnected_ys.append(y)
+                    elif r > g + 20 and r > b + 20:
+                        red_count += 1
+                        connected_xs.append(x)
+                        connected_ys.append(y)
+                    else:
+                        green_count += 1
+                        disconnected_xs.append(x)
+                        disconnected_ys.append(y)
                 elif mx > 50:
                     neutral_count += 1
-        total = colored_count + neutral_count
+        total = green_count + red_count + neutral_count
         if total == 0:
             return ('unknown', 0, 0)
-        colored_pct = colored_count * 100 // total
-        add_log("INFO", udid, f"[Proxy] Color check: colored={colored_pct}% neutral={neutral_count}")
-        if colored_pct > 20 and colored_xs:
-            tap_x = colored_xs[len(colored_xs) // 2]
-            tap_y = colored_ys[len(colored_ys) // 2]
-            return ('colored', tap_x, tap_y)
+        green_pct = green_count * 100 // total
+        red_pct = red_count * 100 // total
+        add_log("INFO", udid, f"[Proxy] Color check: green={green_pct}% red={red_pct}% neutral={neutral_count}")
+        if green_pct > 15 and disconnected_xs:
+            tap_x = disconnected_xs[len(disconnected_xs) // 2]
+            tap_y = disconnected_ys[len(disconnected_ys) // 2]
+            return ('disconnected', tap_x, tap_y)
+        if red_pct > 15 and connected_xs:
+            tap_x = connected_xs[len(connected_xs) // 2]
+            tap_y = connected_ys[len(connected_ys) // 2]
+            return ('connected', tap_x, tap_y)
         return ('neutral', 540, 1587)
     except Exception as e:
         add_log("WARN", udid, f"[Proxy] Color check failed: {e}")
@@ -6874,9 +6893,9 @@ def _check_super_proxy_ui(udid):
         xml = _ensure_super_proxy_detail(udid, xml)
     time.sleep(1)
     color, cx, cy = _screencap_color_check(udid)
-    if color == 'neutral':
+    if color == 'neutral' or color == 'connected':
         return True
-    if color == 'colored':
+    if color == 'disconnected':
         return False
     if xml:
         if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
@@ -6906,15 +6925,15 @@ def _tap_super_proxy_start(udid):
         xml = _ensure_super_proxy_detail(udid, xml)
     time.sleep(1)
     color, tap_x, tap_y = _screencap_color_check(udid)
-    if color == 'neutral':
-        add_log("INFO", udid, "[Proxy] Color=NEUTRAL (connected) - does NOT touch toggle.")
+    if color == 'neutral' or color == 'connected':
+        add_log("INFO", udid, f"[Proxy] Color={color.upper()} (already active) - does NOT touch toggle.")
         return False
-    if color == 'colored':
+    if color == 'disconnected':
         subprocess.run(
             [adb_path, '-s', udid, 'shell', 'input', 'tap', str(tap_x), str(tap_y)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
         )
-        add_log("INFO", udid, f"[Proxy] Color=COLORED + tapped toggle at ({tap_x},{tap_y}) to CONNECT.")
+        add_log("INFO", udid, f"[Proxy] Color=GREEN (disconnected) + tapped toggle at ({tap_x},{tap_y}) to CONNECT.")
         return True
     if xml:
         start_btn = _find_ui_button(xml, ['Start', 'Connect'])
