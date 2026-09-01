@@ -6796,8 +6796,9 @@ def _ensure_super_proxy_detail(udid):
 
 def _screencap_color_check(udid):
     """Take a screenshot and check the toggle button color area.
-    Returns 'green' if button is green (disconnected), 'red' if red (connected),
-    'unknown' if cannot determine."""
+    Returns ('colored', x, y) if colored button found (disconnected),
+    ('neutral', x, y) if neutral (connected), ('unknown', 0, 0) if cannot determine.
+    Also returns the center coordinates of the colored area for tapping."""
     try:
         import tempfile, os
         from PIL import Image
@@ -6812,32 +6813,36 @@ def _screencap_color_check(udid):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, startupinfo=startupinfo
         )
         if not os.path.exists(local):
-            return 'unknown'
+            return ('unknown', 0, 0)
         img = Image.open(local)
-        greens = 0
-        reds = 0
-        total = 0
-        for y in range(1510, 1670, 8):
-            for x in range(100, 1000, 40):
+        colored_xs = []
+        colored_ys = []
+        neutral_count = 0
+        colored_count = 0
+        for y in range(1490, 1680, 6):
+            for x in range(40, 1040, 20):
                 r, g, b = img.getpixel((x, y))[:3]
-                total += 1
-                if g > 130 and g > r * 1.3 and g > b * 1.1:
-                    greens += 1
-                elif r > 100 and r > g * 1.1:
-                    reds += 1
+                mx = max(r, g, b)
+                mn = min(r, g, b)
+                if mx - mn > 40 and mx > 80:
+                    colored_count += 1
+                    colored_xs.append(x)
+                    colored_ys.append(y)
+                elif mx > 50:
+                    neutral_count += 1
+        total = colored_count + neutral_count
         if total == 0:
-            return 'unknown'
-        green_pct = greens * 100 // total
-        red_pct = reds * 100 // total
-        add_log("INFO", udid, f"[Proxy] Color check: green={green_pct}% red={red_pct}%")
-        if green_pct > 30:
-            return 'green'
-        if red_pct > 30:
-            return 'red'
-        return 'unknown'
+            return ('unknown', 0, 0)
+        colored_pct = colored_count * 100 // total
+        add_log("INFO", udid, f"[Proxy] Color check: colored={colored_pct}% neutral={neutral_count}")
+        if colored_pct > 20 and colored_xs:
+            tap_x = colored_xs[len(colored_xs) // 2]
+            tap_y = colored_ys[len(colored_ys) // 2]
+            return ('colored', tap_x, tap_y)
+        return ('neutral', 540, 1587)
     except Exception as e:
         add_log("WARN", udid, f"[Proxy] Color check failed: {e}")
-        return 'unknown'
+        return ('unknown', 0, 0)
 
 
 def _ensure_super_proxy_detail(udid, xml):
@@ -6868,10 +6873,10 @@ def _check_super_proxy_ui(udid):
     if xml:
         xml = _ensure_super_proxy_detail(udid, xml)
     time.sleep(1)
-    color = _screencap_color_check(udid)
-    if color == 'red':
+    color, cx, cy = _screencap_color_check(udid)
+    if color == 'neutral':
         return True
-    if color == 'green':
+    if color == 'colored':
         return False
     if xml:
         if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
@@ -6882,10 +6887,6 @@ def _check_super_proxy_ui(udid):
 
 
 def _wait_proxy_connected(udid, max_wait=35, interval=5):
-    """Wait (polling) until the Super Proxy VPN turns RED (connected). During a
-    mass 15-phone bootstrap the VPN can take 15-30s to establish; a single short
-    sleep + repeated re-taps just reset the connection and it never links. So we
-    tap once, then wait patiently for the state to become connected."""
     waited = 0
     while waited < max_wait:
         if _stop_requested(udid):
@@ -6904,27 +6905,17 @@ def _tap_super_proxy_start(udid):
     if xml:
         xml = _ensure_super_proxy_detail(udid, xml)
     time.sleep(1)
-    color = _screencap_color_check(udid)
-    if color == 'red':
-        add_log("INFO", udid, "[Proxy] Color=RED (connected) - does NOT touch toggle.")
+    color, tap_x, tap_y = _screencap_color_check(udid)
+    if color == 'neutral':
+        add_log("INFO", udid, "[Proxy] Color=NEUTRAL (connected) - does NOT touch toggle.")
         return False
-    if color == 'green':
-        start_btn = None
-        if xml:
-            start_btn = _find_ui_button(xml, ['Start', 'Connect'])
-        if not start_btn:
-            btn_area = _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']) if xml else None
-            if btn_area:
-                start_btn = btn_area
-        if start_btn:
-            subprocess.run(
-                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(start_btn[0]), str(start_btn[1])],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-            )
-            add_log("INFO", udid, f"[Proxy] Color=GREEN + tapped toggle at {start_btn} to CONNECT.")
-            return True
-        add_log("WARN", udid, "[Proxy] Color=GREEN but no button found in UI; not touching.")
-        return False
+    if color == 'colored':
+        subprocess.run(
+            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(tap_x), str(tap_y)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
+        )
+        add_log("INFO", udid, f"[Proxy] Color=COLORED + tapped toggle at ({tap_x},{tap_y}) to CONNECT.")
+        return True
     if xml:
         start_btn = _find_ui_button(xml, ['Start', 'Connect'])
         if start_btn:
