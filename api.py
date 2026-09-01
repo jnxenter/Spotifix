@@ -6795,14 +6795,11 @@ def _ensure_super_proxy_detail(udid):
 
 
 def _ensure_super_proxy_detail(udid, xml):
-    # Si estamos en la VISTA DE LISTA (no hay boton Start/Stop), buscar la
-    # tarjeta del proxy por su text (p.ej. "Proxy 03") y tocarla para entrar
-    # al detalle donde esta el boton Start/Stop.
     if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect', 'Start', 'Connect']):
         return xml
     import re
     proxy_card = re.compile(
-        r'text="(Proxy \d+)"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        r'content-desc="(Proxy \d+)[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
         re.IGNORECASE)
     m = proxy_card.search(xml)
     if m:
@@ -6813,7 +6810,7 @@ def _ensure_super_proxy_detail(udid, xml):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
         )
         add_log("INFO", udid, f"[Proxy] Tapped proxy card '{m.group(1)}' at ({cx},{cy}) to enter detail.")
-        time.sleep(2)
+        time.sleep(3)
         return _dump_super_proxy_ui(udid)
     return xml
 
