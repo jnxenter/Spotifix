@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.4"
+Bot_version = "4.6.5"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -6802,68 +6802,22 @@ def _wait_proxy_connected(udid, max_wait=35, interval=5):
 
 
 def _tap_super_proxy_start(udid):
-    # CRITICO: si la VPN ya esta activa (dumpsys vpn), el proxy esta conectado
-    # (rojo). NO toques el toggle: tocarlo pondria el boton en verde y
-    # DESCONECTARIA un proxy que estaba bien. Conectado = rojo = no tocar.
+    # REGLA DE ORO: el boton en ROJO = CONECTADO = NUNCA se toca. Solo se toca
+    # si detectamos claramente un boton VERDE (desconectado). Si no estamos
+    # 100% seguros de que hay un boton VERDE, NO tocamos nada (mejor no forzar
+    # que desconectar un proxy que ya estaba bien). Sin percutar a ciegas.
     if _is_vpn_active(udid):
         return True
-    _ensure_super_proxy_detail(udid)
     color, pos = _screenshot_button_color(udid)
     if color == 'green' and pos:
         subprocess.run(
             [adb_path, '-s', udid, 'shell', 'input', 'tap', str(pos[0]), str(pos[1])],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
         )
+        add_log("INFO", udid, f"[Proxy] Tapped GREEN toggle ({color}) at {pos} to CONNECT.")
         return True
-    if color == 'red' and pos:
-        return True
-
-    card = _find_proxy_card_pos(udid)
-    if card:
-        subprocess.run(
-            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(card[0]), str(card[1])],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-        )
-        time.sleep(3)
-        color, pos = _screenshot_button_color(udid)
-        if color == 'green' and pos:
-            subprocess.run(
-                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(pos[0]), str(pos[1])],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-            )
-            return True
-        if color == 'red' and pos:
-            return True
-
-    xml = _dump_super_proxy_ui(udid)
-    if xml:
-        target = _find_ui_button(xml, ['Start', 'Connect'])
-        if not target:
-            proxy_card = _find_ui_text(xml, ['Proxy'], exclude=['Super Proxy', 'Add proxy', 'Proxies'])
-            if proxy_card:
-                subprocess.run(
-                    [adb_path, '-s', udid, 'shell', 'input', 'tap', str(proxy_card[0]), str(proxy_card[1])],
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-                )
-                time.sleep(3)
-                color, pos = _screenshot_button_color(udid)
-                if color == 'green' and pos:
-                    subprocess.run(
-                        [adb_path, '-s', udid, 'shell', 'input', 'tap', str(pos[0]), str(pos[1])],
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-                    )
-                    return True
-                if color == 'red' and pos:
-                    return True
-                xml = _dump_super_proxy_ui(udid)
-                if xml:
-                    target = _find_ui_button(xml, ['Start', 'Connect'])
-        if target:
-            subprocess.run(
-                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(target[0]), str(target[1])],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-            )
-            return True
+    # ROJO = ya conectado, o no seguro: NO tocar.
+    add_log("INFO", udid, f"[Proxy] Toggle is {color or 'unknown'} - NOT connecting (only touch GREEN).")
     return False
 
 
