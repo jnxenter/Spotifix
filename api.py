@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.3"
+Bot_version = "4.6.4"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -6763,6 +6763,12 @@ def _ensure_super_proxy_detail(udid):
 
 
 def _check_super_proxy_ui(udid):
+    # Fiable primero: si la VPN real ya esta activa (dumpsys vpn), esta CONECTADO.
+    # No hay que tocar nada. El color del boton es solo una pista y puede fallar
+    # en arranque masivo (app no al frente), causando que el bot percuta el toggle
+    # y DESCONECTE un proxy que ya estaba bien (rojo).
+    if _is_vpn_active(udid):
+        return True
     if _is_super_proxy_foreground(udid):
         color, pos = _screenshot_button_color(udid)
         if color == 'green':
@@ -6796,6 +6802,11 @@ def _wait_proxy_connected(udid, max_wait=35, interval=5):
 
 
 def _tap_super_proxy_start(udid):
+    # CRITICO: si la VPN ya esta activa (dumpsys vpn), el proxy esta conectado
+    # (rojo). NO toques el toggle: tocarlo pondria el boton en verde y
+    # DESCONECTARIA un proxy que estaba bien. Conectado = rojo = no tocar.
+    if _is_vpn_active(udid):
+        return True
     _ensure_super_proxy_detail(udid)
     color, pos = _screenshot_button_color(udid)
     if color == 'green' and pos:
