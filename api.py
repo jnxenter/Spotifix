@@ -6478,9 +6478,16 @@ def _send_proxy_alert(udid, proxy, message):
 def _is_vpn_active(udid):
     # En estos dispositivos `dumpsys vpn` NO existe ("Can't find service: vpn").
     # La fuente fiable es `dumpsys connectivity`, que muestra el bloque VPN real
-    # (VPN CONNECTED + OwnerUid/sessionId). Se verifica que el VPN conectado es
-    # realmente el de Super Proxy (por uid del paquete) para no confundirlo con
-    # otro VPN (p.ej. surfshark) instalado en el telefono.
+    # cuando hay un VPN activo: "VPN CONNECTED" + OwnerUid=session_id del
+    # servidor proxy + OwnerUid=UID del paquete que lo creo.
+    #
+    # OJO: NO se puede usar 'com.scheler.superproxy' + 'connected' como check
+    # porque el paquete SIEMPRE aparece en NetworkRequest (el paquete esta
+    # instalado) y 'connected' aparece en "WIFI CONNECTED" — ambos son True
+    # aunque NO haya VPN activo, causando un falso positivo constante.
+    #
+    # El UNICO check fiable es: "vpn connected" en el output + que el
+    # OwnerUid del bloque VPN coincida con el UID real de Super Proxy.
     try:
         uid = None
         try:
@@ -6503,17 +6510,8 @@ def _is_vpn_active(udid):
                 output = result.stdout.lower()
                 if not output:
                     continue
-                if 'com.scheler.superproxy' in output and ('connected' in output or 'established' in output):
+                if 'vpn connected' in output and uid and f'owneruid: {uid}' in output:
                     return True
-                if 'active vpn' in output and 'com.scheler.superproxy' in output:
-                    return True
-                if 'vpn connected' in output:
-                    if uid and f'owneruid: {uid}' in output:
-                        return True
-                    if 'com.scheler.superproxy' in output:
-                        return True
-                    if 'sessionid=proxy' in output:
-                        return True
             except:
                 continue
         return False
