@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.5"
+Bot_version = "4.6.6"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -6763,25 +6763,18 @@ def _ensure_super_proxy_detail(udid):
 
 
 def _check_super_proxy_ui(udid):
-    # Fiable primero: si la VPN real ya esta activa (dumpsys vpn), esta CONECTADO.
-    # No hay que tocar nada. El color del boton es solo una pista y puede fallar
-    # en arranque masivo (app no al frente), causando que el bot percuta el toggle
-    # y DESCONECTE un proxy que ya estaba bien (rojo).
+    # Conectado se decide de forma FIABLE por content-desc del boton real via
+    # uiautomator (Stop/Running/Disconnect = conectado/rojo, Start/Connect =
+    # desconectado/verde) y por dumpsys vpn. NO se usa el color de pixeles: se
+    # confundia con la barra de tabs y daba resultados erroneos.
     if _is_vpn_active(udid):
         return True
-    if _is_super_proxy_foreground(udid):
-        color, pos = _screenshot_button_color(udid)
-        if color == 'green':
-            return False
-        if color == 'red':
-            return True
-        if not color:
-            return False
     xml = _dump_super_proxy_ui(udid)
-    if xml and _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
-        return True
-    if xml and (_find_ui_button(xml, ['Start', 'Connect'])):
-        return False
+    if xml:
+        if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
+            return True
+        if _find_ui_button(xml, ['Start', 'Connect']):
+            return False
     return False
 
 
@@ -6802,22 +6795,31 @@ def _wait_proxy_connected(udid, max_wait=35, interval=5):
 
 
 def _tap_super_proxy_start(udid):
-    # REGLA DE ORO: el boton en ROJO = CONECTADO = NUNCA se toca. Solo se toca
-    # si detectamos claramente un boton VERDE (desconectado). Si no estamos
-    # 100% seguros de que hay un boton VERDE, NO tocamos nada (mejor no forzar
-    # que desconectar un proxy que ya estaba bien). Sin percutar a ciegas.
+    # REGLA DE ORO: el boton en ROJO = CONECTADO = JAMAS se toca. Solo se toca
+    # si esta VERDE = DESCONECTADO. Localizamos el boton real por su content-desc
+    # via uiautomator (exacto y fiable), NO por color de pixeles (que se confundia
+    # con la barra de tabs verde y tocaba el punto equivocado).
     if _is_vpn_active(udid):
         return True
-    color, pos = _screenshot_button_color(udid)
-    if color == 'green' and pos:
+    xml = _dump_super_proxy_ui(udid)
+    if not xml:
+        add_log("WARN", udid, "[Proxy] No Super Proxy UI dump; not touching toggle.")
+        return False
+    # Conectado (rojo) => NO tocar.
+    stop_btn = _find_ui_button(xml, ['Stop', 'Running', 'Disconnect'])
+    if stop_btn:
+        add_log("INFO", udid, "[Proxy] Toggle is STOP/RED (connected) - does NOT touch it.")
+        return False
+    # Desconectado (verde) => tocar exactamente ese boton.
+    start_btn = _find_ui_button(xml, ['Start', 'Connect'])
+    if start_btn:
         subprocess.run(
-            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(pos[0]), str(pos[1])],
+            [adb_path, '-s', udid, 'shell', 'input', 'tap', str(start_btn[0]), str(start_btn[1])],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
         )
-        add_log("INFO", udid, f"[Proxy] Tapped GREEN toggle ({color}) at {pos} to CONNECT.")
+        add_log("INFO", udid, f"[Proxy] Tapped START/GREEN toggle at {start_btn} to CONNECT.")
         return True
-    # ROJO = ya conectado, o no seguro: NO tocar.
-    add_log("INFO", udid, f"[Proxy] Toggle is {color or 'unknown'} - NOT connecting (only touch GREEN).")
+    add_log("WARN", udid, "[Proxy] Could not locate proxy toggle (no Stop/Start button found); not touching.")
     return False
 
 
@@ -6840,17 +6842,31 @@ def _validate_device_proxy(udid, proxy, connection_type):
             time.sleep(2)
             continue
         add_log("WARN", udid, f"[Proxy] VALIDATION {vround}/4: NOT connected, attempting to start...")
-        _open_super_proxy(udid)
-        time.sleep(1)
-        # Tap once and wait patiently for the VPN to turn RED (connected). Do NOT
-        # repeatedly re-tap: that cancels an in-progress connection and the VPN
-        # never finishes establishing (especially when 15 phones connect at once).
-        _tap_super_proxy_start(udid)
-        if _wait_proxy_connected(udid, max_wait=35, interval=5):
-            connected_rounds += 1
-            add_log("SUCC", udid, f"[Proxy] RECTIFIED (round {vround}/4, {connected_rounds}/4 rounds ok)")
-        else:
-            add_log("WARN", udid, f"[Proxy] Round {vround}/4 could NOT connect within wait window; continuing.")
+        # Intenta conectar tocando SOLO el boton START real (verde) via content-desc.
+        # El tap NUNCA toca el STOP (rojo/conectado). Reintenta en espacio de rondas.
+        rectified = False
+        for attempt in range(1, 6):
+            if _stop_requested(udid):
+                return False
+            _open_super_proxy(udid)
+            time.sleep(1)
+            if _check_super_proxy_ui(udid):
+                connected_rounds += 1
+                add_log("SUCC", udid, f"[Proxy] VALIDATION {vround}/4: already CONNECTED ({connected_rounds}/4 rounds ok)")
+                rectified = True
+                time.sleep(2)
+                break
+            if _tap_super_proxy_start(udid):
+                if _wait_proxy_connected(udid, max_wait=15, interval=3):
+                    connected_rounds += 1
+                    add_log("SUCC", udid, f"[Proxy] RECTIFIED on attempt {attempt} (round {vround}/4, {connected_rounds}/4 rounds ok)")
+                    rectified = True
+                    time.sleep(2)
+                    break
+            add_log("WARN", udid, f"[Proxy] Rectify attempt {attempt}/5 (round {vround}/4) could not connect; retrying...")
+            time.sleep(2)
+        if not rectified:
+            add_log("WARN", udid, f"[Proxy] Round {vround}/4 could NOT connect; continuing to next round.")
 
     if connected_rounds >= 3:
         add_log("SUCC", udid, f"[Proxy] Validated CONNECTED in {connected_rounds}/4 rounds. Proceeding to launch apps.")
