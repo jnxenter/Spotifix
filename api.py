@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.10"
+Bot_version = "4.6.11"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -8911,11 +8911,45 @@ def install_update():
             resp = opener.open(req, timeout=60)
             return resp.read()
 
+        def _fetch_release_zip():
+            tag = remote_version if remote_version.startswith('v') else 'v' + remote_version
+            url = f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Spotifix-Updater'})
+            resp = opener.open(req, timeout=180)
+            import zipfile
+            import io
+            zf = zipfile.ZipFile(io.BytesIO(resp.read()))
+            root_name = None
+            files_map = {}
+            for name in zf.namelist():
+                if name.endswith('/'):
+                    continue
+                parts = name.split('/')
+                if len(parts) < 2:
+                    continue
+                if root_name is None:
+                    root_name = parts[0]
+                if parts[0] != root_name:
+                    continue
+                rel = '/'.join(parts[1:])
+                if rel in SOURCE_FILES_TO_UPDATE:
+                    files_map[rel] = zf.read(name)
+            zf.close()
+            return files_map or None
+
+        zip_files = None
+        try:
+            zip_files = _fetch_release_zip()
+            if zip_files:
+                add_log("INFO", "updater", f"Release ZIP v{remote_version} downloaded ({len(zip_files)} files)")
+        except Exception as e:
+            add_log("WARN", "updater", f"Release ZIP failed, falling back to per-file: {_explain(e)}")
+
         for fname in SOURCE_FILES_TO_UPDATE:
             dest = os.path.join(app_dir, fname)
+            data = zip_files.get(fname) if zip_files else None
             errors = []
             attempts = 0
-            data = None
             while data is None and attempts < 2:
                 attempts += 1
                 try:
