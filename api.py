@@ -6869,18 +6869,19 @@ def _ensure_super_proxy_detail(udid, xml):
         return xml
     import re
     proxy_card = re.compile(
-        r'content-desc="(Proxy \d+)[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        r'content-desc="(?:Proxy )?(\d+)[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
         re.IGNORECASE)
     for attempt in range(3):
         m = proxy_card.search(xml)
         if m:
             x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
-            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            tap_x = x2 - 80
+            tap_y = (y1 + y2) // 2
             subprocess.run(
-                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(cx), str(cy)],
+                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(tap_x), str(tap_y)],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
             )
-            add_log("INFO", udid, f"[Proxy] Tapped proxy card '{m.group(1)}' at ({cx},{cy}) attempt {attempt+1}.")
+            add_log("INFO", udid, f"[Proxy] Tapped proxy card '>' arrow '{m.group(1)}' at ({tap_x},{tap_y}) attempt {attempt+1}.")
             time.sleep(3)
             new_xml = _dump_super_proxy_ui(udid)
             if new_xml and _find_ui_button(new_xml, ['Stop', 'Running', 'Disconnect', 'Start', 'Connect']):
@@ -6889,7 +6890,7 @@ def _ensure_super_proxy_detail(udid, xml):
             xml = new_xml if new_xml else xml
         else:
             break
-    return xml
+    return None
 
 
 def _check_super_proxy_ui(udid):
