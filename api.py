@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.14"
+Bot_version = "4.6.15"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -8897,11 +8897,14 @@ def check_update():
     })
 
 
-SOURCE_FILES_TO_UPDATE = [
+CORE_FILES_TO_UPDATE = [
     'api.py', 'renderer.js', 'index.html', 'login.html',
     'main.js', 'preload.js', 'package.json',
-    'apk/SoundAssistant.apk', 'apk/SoundAssistant_1.3.5.14.1.apk'
 ]
+AUX_FILES_TO_UPDATE = [
+    'apk/SoundAssistant.apk', 'apk/SoundAssistant_1.3.5.14.1.apk',
+]
+SOURCE_FILES_TO_UPDATE = CORE_FILES_TO_UPDATE + AUX_FILES_TO_UPDATE
 
 
 @app.route('/install_update', methods=['POST'])
@@ -8949,31 +8952,68 @@ def install_update():
             resp = opener.open(req, timeout=60)
             return resp.read()
 
+        def _fetch_raw_github(fname):
+            url = f"https://github.com/{GITHUB_REPO}/raw/{branch}/{fname}"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Spotifix-Updater'})
+            resp = opener.open(req, timeout=60)
+            return resp.read()
+
+        def _fetch_one_file(fname):
+            last_errors = []
+            for attempt in range(3):
+                for fn in (_fetch_raw_http, _fetch_raw_github, _fetch_contents_api):
+                    try:
+                        b = fn(fname)
+                        if b is not None and len(b) > 0:
+                            return b
+                    except Exception as e:
+                        last_errors.append(f"{fn.__name__}: {_explain(e)}")
+                if attempt < 2:
+                    time.sleep(3)
+            add_log("WARN", "updater", f"[Updater] fallos descargando {fname}: {'; '.join(last_errors)}")
+            return None
+
         def _fetch_release_zip():
             tag = remote_version if remote_version.startswith('v') else 'v' + remote_version
-            url = f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip"
-            req = urllib.request.Request(url, headers={'User-Agent': 'Spotifix-Updater'})
-            resp = opener.open(req, timeout=180)
-            import zipfile
-            import io
-            zf = zipfile.ZipFile(io.BytesIO(resp.read()))
-            root_name = None
-            files_map = {}
-            for name in zf.namelist():
-                if name.endswith('/'):
-                    continue
-                parts = name.split('/')
-                if len(parts) < 2:
-                    continue
-                if root_name is None:
-                    root_name = parts[0]
-                if parts[0] != root_name:
-                    continue
-                rel = '/'.join(parts[1:])
-                if rel in SOURCE_FILES_TO_UPDATE:
-                    files_map[rel] = zf.read(name)
-            zf.close()
-            return files_map or None
+            candidates = [
+                f"https://codeload.github.com/{GITHUB_REPO}/zip/refs/tags/{tag}",
+                f"https://github.com/{GITHUB_REPO}/archive/refs/tags/{tag}.zip",
+            ]
+            last_err = ""
+            for url in candidates:
+                for attempt in range(2):
+                    try:
+                        req = urllib.request.Request(url, headers={'User-Agent': 'Spotifix-Updater'})
+                        resp = opener.open(req, timeout=180)
+                        import zipfile
+                        import io
+                        zf = zipfile.ZipFile(io.BytesIO(resp.read()))
+                        root_name = None
+                        files_map = {}
+                        for name in zf.namelist():
+                            if name.endswith('/'):
+                                continue
+                            parts = name.split('/')
+                            if len(parts) < 2:
+                                continue
+                            if root_name is None:
+                                root_name = parts[0]
+                            if parts[0] != root_name:
+                                continue
+                            rel = '/'.join(parts[1:])
+                            if rel in SOURCE_FILES_TO_UPDATE:
+                                files_map[rel] = zf.read(name)
+                        zf.close()
+                        if files_map:
+                            return files_map
+                        last_err = "ZIP sin archivos relevantes"
+                    except Exception as e:
+                        last_err = _explain(e)
+                        add_log("WARN", "updater", f"[Updater] ZIP {url} attempt {attempt+1} fallo: {last_err}")
+                        time.sleep(3)
+            if last_err:
+                raise RuntimeError(last_err)
+            return None
 
         zip_files = None
         try:
@@ -8986,26 +9026,17 @@ def install_update():
         for fname in SOURCE_FILES_TO_UPDATE:
             dest = os.path.join(app_dir, fname)
             data = zip_files.get(fname) if zip_files else None
-            errors = []
-            attempts = 0
-            while data is None and attempts < 2:
-                attempts += 1
-                try:
-                    os.makedirs(os.path.dirname(dest), exist_ok=True)
-                    data = _fetch_contents_api(fname)
-                except Exception as e:
-                    errors.append(f"contents: {_explain(e)}")
-                if data is None or len(data) == 0:
-                    try:
-                        data = _fetch_raw_http(fname)
-                    except Exception as e:
-                        errors.append(f"raw: {_explain(e)}")
-                    if data is not None and len(data) == 0:
-                        data = None
             if data is None:
-                failed.append(f"{fname}: {'; '.join(errors)}")
+                data = _fetch_one_file(fname)
+            if data is None:
+                err_note = f"{fname}: no se pudo descargar"
+                if fname in AUX_FILES_TO_UPDATE:
+                    add_log("WARN", "updater", f"[Updater] {err_note} - BEST-EFFORT: se omite, la app sigue.")
+                    continue
+                failed.append(err_note)
                 continue
             try:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
                 with open(dest, 'wb') as f:
                     f.write(data)
                 downloaded.append(fname)
