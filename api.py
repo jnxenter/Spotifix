@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.9"
+Bot_version = "4.6.10"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -8885,31 +8885,60 @@ def install_update():
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+        def _explain(err):
+            status = ""
+            if hasattr(err, 'code'):
+                status = f" HTTP_{err.code}"
+            reason = getattr(err, 'reason', None) or (err.args and err.args[0]) or ''
+            return f"{type(err).__name__}{status} {reason} {err}".strip()
+
+        def _fetch_contents_api(fname):
+            url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{fname}?ref={branch}"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Spotifix-Updater'})
+            resp = opener.open(req, timeout=30)
+            meta = json.loads(resp.read().decode())
+            if 'content' in meta and meta['content']:
+                import base64
+                return base64.b64decode(meta['content'])
+            if meta.get('download_url'):
+                resp2 = opener.open(meta['download_url'], timeout=60)
+                return resp2.read()
+            return None
+
+        def _fetch_raw_http(fname):
+            url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{branch}/{fname}"
+            req = urllib.request.Request(url, headers={'User-Agent': 'Spotifix-Updater'})
+            resp = opener.open(req, timeout=60)
+            return resp.read()
+
         for fname in SOURCE_FILES_TO_UPDATE:
-            # Use the GitHub Contents API (no CDN cache) so we always get the newest file.
-            # Note: for >1MB files GitHub returns empty content + download_url, so fall back to it.
-            raw_url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{fname}?ref={branch}"
             dest = os.path.join(app_dir, fname)
-            try:
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                req = urllib.request.Request(raw_url, headers={'User-Agent': 'Spotifix-Updater'})
-                resp = opener.open(req, timeout=30)
-                meta = json.loads(resp.read().decode())
-                data = None
-                if 'content' in meta and meta['content']:
-                    import base64
-                    data = base64.b64decode(meta['content'])
-                elif meta.get('download_url'):
-                    resp2 = opener.open(meta['download_url'], timeout=60)
-                    data = resp2.read()
+            errors = []
+            attempts = 0
+            data = None
+            while data is None and attempts < 2:
+                attempts += 1
+                try:
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    data = _fetch_contents_api(fname)
+                except Exception as e:
+                    errors.append(f"contents: {_explain(e)}")
                 if data is None or len(data) == 0:
-                    failed.append(f"{fname}: empty download")
-                    continue
+                    try:
+                        data = _fetch_raw_http(fname)
+                    except Exception as e:
+                        errors.append(f"raw: {_explain(e)}")
+                    if data is not None and len(data) == 0:
+                        data = None
+            if data is None:
+                failed.append(f"{fname}: {'; '.join(errors)}")
+                continue
+            try:
                 with open(dest, 'wb') as f:
                     f.write(data)
                 downloaded.append(fname)
             except Exception as e:
-                failed.append(f"{fname}: {e}")
+                failed.append(f"{fname}: write: {_explain(e)}")
         if not failed:
             add_log("SUCC", "updater", f"Updated {len(downloaded)} files to v{remote_version}. Restarting...")
             flag_path = os.path.join(app_dir, '_update_restart')
