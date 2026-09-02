@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.12"
+Bot_version = "4.6.13"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -6793,21 +6793,55 @@ def _is_super_proxy_list_view(udid):
     return False
 
 
-def _ensure_super_proxy_detail(udid):
-    """Si está en la vista de inicio/lista, toca la tarjeta del proxy para entrar al detalle.
-    Devuelve True si logró llegar a una vista con botón o si nunca estuvo en lista."""
-    if not _is_super_proxy_list_view(udid):
-        return True
-    card = _find_proxy_card_pos(udid)
-    if card:
+def _ensure_super_proxy_detail(udid, xml=None):
+    """Asegura estar en el detail view de Super Proxy y devuelve algo truthy si hay
+    boton Start/Stop. Estrategia VISION-FIRST: en telefonos Samsung reales la app
+    Flutter no expone la tarjeta al uiautomator (dump sin content-desc), asi que:
+    1) se detecta el boton de color a pantalla completa por screenshot;
+    2) si no, se toca la tarjeta del proxy para entrar al detalle (por XML o por banda
+       blanca visual) y se re-chequea el color hasta 3 intentos."""
+    import re
+    if xml and _find_ui_button(xml, ['Stop', 'Running', 'Disconnect', 'Start', 'Connect']):
+        return xml
+    color, cx, cy = _screencap_color_check(udid)
+    if color in ('disconnected', 'connected'):
+        add_log("INFO", udid, f"[Proxy] Detail view detectado por vision (color={color}) sin depender del XML.")
+        return f"<detail-view color='{color}'/>"
+    proxy_card = re.compile(
+        r'content-desc="(?:Proxy )?(\d+)[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
+        re.IGNORECASE)
+    for attempt in range(3):
+        card = None
+        label = ''
+        if xml:
+            m = proxy_card.search(xml)
+            if m:
+                x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+                card = (x2 - 80, (y1 + y2) // 2)
+                label = m.group(1)
+        if card is None:
+            if _is_super_proxy_foreground(udid):
+                pos = _find_proxy_card_pos(udid)
+                if pos:
+                    card = pos
+                    label = 'visual'
+        if not card:
+            break
+        add_log("INFO", udid, f"[Proxy] Tocando tarjeta del proxy ({label}) en ({card[0]},{card[1]}) attempt {attempt+1}...")
         subprocess.run(
             [adb_path, '-s', udid, 'shell', 'input', 'tap', str(card[0]), str(card[1])],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
         )
-        add_log("INFO", udid, f"[Proxy] In Super Proxy home/list view. Tapped proxy card at {card} to open detail...")
-        time.sleep(3)
-        return True
-    return False
+        time.sleep(4)
+        color, cx, cy = _screencap_color_check(udid)
+        if color in ('disconnected', 'connected'):
+            add_log("INFO", udid, f"[Proxy] Attempt {attempt+1}: detail view alcanzado (color={color}).")
+            return f"<detail-view color='{color}'/>"
+        add_log("WARN", udid, f"[Proxy] Attempt {attempt+1}: aun sin boton de color; reintentando...")
+        time.sleep(1)
+        if xml:
+            xml = _dump_super_proxy_ui(udid) or xml
+    return None
 
 
 def _screencap_color_check(udid):
@@ -6888,42 +6922,11 @@ def _screencap_color_check(udid):
         return ('unknown', 0, 0)
 
 
-def _ensure_super_proxy_detail(udid, xml):
-    if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect', 'Start', 'Connect']):
-        return xml
-    import re
-    proxy_card = re.compile(
-        r'content-desc="(?:Proxy )?(\d+)[^"]*"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"',
-        re.IGNORECASE)
-    for attempt in range(3):
-        m = proxy_card.search(xml)
-        if m:
-            x1, y1, x2, y2 = int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
-            tap_x = x2 - 80
-            tap_y = (y1 + y2) // 2
-            subprocess.run(
-                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(tap_x), str(tap_y)],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-            )
-            add_log("INFO", udid, f"[Proxy] Tapped proxy card '>' arrow '{m.group(1)}' at ({tap_x},{tap_y}) attempt {attempt+1}.")
-            time.sleep(4)
-            color, cx, cy = _screencap_color_check(udid)
-            if color in ('disconnected', 'connected'):
-                add_log("INFO", udid, f"[Proxy] Attempt {attempt+1}: entered detail view (color={color}).")
-                return f"<detail-view color='{color}'/>"
-            add_log("WARN", udid, f"[Proxy] Attempt {attempt+1}: still in list view, retrying...")
-            xml = _dump_super_proxy_ui(udid) or xml
-        else:
-            break
-    return None
-
-
 def _check_super_proxy_ui(udid):
     _open_super_proxy(udid)
     time.sleep(1)
     xml = _dump_super_proxy_ui(udid)
-    if xml:
-        xml = _ensure_super_proxy_detail(udid, xml)
+    xml = _ensure_super_proxy_detail(udid, xml)
     if not xml:
         add_log("WARN", udid, "[Proxy] Could not reach detail view; skipping color check.")
         return False
@@ -6931,8 +6934,6 @@ def _check_super_proxy_ui(udid):
     color, cx, cy = _screencap_color_check(udid)
     if color == 'neutral' or color == 'connected':
         return True
-    if color == 'disconnected':
-        return False
     return False
 
 
@@ -6952,8 +6953,7 @@ def _tap_super_proxy_start(udid):
     _open_super_proxy(udid)
     time.sleep(1)
     xml = _dump_super_proxy_ui(udid)
-    if xml:
-        xml = _ensure_super_proxy_detail(udid, xml)
+    xml = _ensure_super_proxy_detail(udid, xml)
     if not xml:
         add_log("WARN", udid, "[Proxy] Could not reach detail view; not touching toggle.")
         return False
