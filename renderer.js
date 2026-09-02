@@ -1088,7 +1088,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         checkBtn.disabled = false;
                         checkBtn.textContent = 'Check for Updates';
                         if (data.error) {
-                            statusDiv.innerHTML = '<p style="color: red;">Error: ' + data.error + '</p>';
+                            statusDiv.innerHTML = '<p style="color: red;">Error: ' + (data.error || 'Unknown error') + '</p>';
                             return;
                         }
                         if (data.has_update) {

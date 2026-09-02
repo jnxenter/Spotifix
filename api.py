@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.13"
+Bot_version = "4.6.14"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -8833,6 +8833,18 @@ def get_version():
 @app.route('/check_update', methods=['GET'])
 @require_token
 def check_update():
+    import re
+    def _ver_tuple(s):
+        try:
+            return tuple(int(x) for x in s.split("."))
+        except Exception:
+            return (0, 0, 0)
+    current = _ver_tuple(Bot_version)
+    remote_tag = ""
+    remote_notes = ""
+    errors = []
+    # 1) CDN estatico (SIN cuota de API): /releases/latest responde 302 hacia
+    #    .../releases/tag/vX.Y.Z. Misma infraestructura que el ZIP de instalacion.
     try:
         import urllib.request
         import urllib.error
@@ -8840,23 +8852,49 @@ def check_update():
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-        req = urllib.request.Request(url, headers={"User-Agent": "Spotifix-Updater"})
+        req = urllib.request.Request(
+            f"https://github.com/{GITHUB_REPO}/releases/latest",
+            headers={"User-Agent": "Mozilla/5.0 (Spotifix-Updater)"})
         with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-            data = json.loads(resp.read().decode())
-        remote_tag = data.get("tag_name", "").lstrip("v")
-        remote_notes = data.get("body", "")
-        current = tuple(int(x) for x in Bot_version.split("."))
-        remote = tuple(int(x) for x in remote_tag.split(".")) if remote_tag else (0, 0, 0)
-        has_update = remote > current
-        return jsonify({
-            "has_update": has_update,
-            "current_version": Bot_version,
-            "remote_version": remote_tag,
-            "release_notes": remote_notes
-        })
+            final_url = resp.geturl()
+        m = re.search(r'releases/tag/v?([0-9][0-9\.]*)', final_url or "")
+        if m:
+            remote_tag = m.group(1)
+        else:
+            errors.append(f"cdnsin tag en redirect: {final_url}")
     except Exception as e:
-        return jsonify({"has_update": False, "error": str(e)})
+        errors.append(f"cdn: {e.__class__.__name__}: {e}")
+    # 2) Fallback a la API de GitHub solo si el CDN no devolvio la version
+    if not remote_tag:
+        try:
+            import urllib.request
+            import urllib.error
+            import ssl
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+            req = urllib.request.Request(url, headers={"User-Agent": "Spotifix-Updater"})
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                data = json.loads(resp.read().decode())
+            remote_tag = data.get("tag_name", "").lstrip("v")
+            remote_notes = data.get("body", "")
+        except Exception as e:
+            errors.append(f"api: {e.__class__.__name__}: {e}")
+    if not remote_tag:
+        err_text = " ; ".join(errors) or "unknown error"
+        add_log("WARN", "updater", f"[Updater] check_update fallo: {err_text}")
+        return jsonify({"has_update": False, "current_version": Bot_version,
+                        "remote_version": "", "error": err_text})
+    remote = _ver_tuple(remote_tag)
+    has_update = remote > current
+    add_log("INFO", "updater", f"[Updater] check_update: current={Bot_version} remote={remote_tag} has_update={has_update}")
+    return jsonify({
+        "has_update": has_update,
+        "current_version": Bot_version,
+        "remote_version": remote_tag,
+        "release_notes": remote_notes
+    })
 
 
 SOURCE_FILES_TO_UPDATE = [
