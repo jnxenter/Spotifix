@@ -7001,9 +7001,19 @@ def _validate_device_proxy(udid, proxy, connection_type):
 
     if connected_rounds >= 3:
         add_log("SUCC", udid, f"[Proxy] Validated CONNECTED in {connected_rounds}/4 rounds. Proceeding to launch apps.")
+        if udid in proxy_blocked_devices:
+            proxy_blocked_devices.discard(udid)
         return True
     add_log("ERR.", udid, f"[Proxy] Only {connected_rounds}/4 rounds connected. Failing validation.")
     proxy_blocked_devices.add(udid)
+    msg = f"Proxy NO conecto tras 4 rondas en {udid}. Celular detenido; se reintentara en la siguiente ronda."
+    _send_proxy_alert(udid, proxy, msg)
+    for pkg in ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']:
+        try:
+            subprocess.run([adb_path, '-s', udid, 'shell', 'am', 'force-stop', pkg],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+        except:
+            pass
     return False
 
 
@@ -8036,13 +8046,25 @@ def main_function(config_data):
                     if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
                         break
                     if udid in proxy_blocked_devices:
-                        add_log("WARN", udid, "[Proxy] Device blocked due to proxy failure. Waiting for restart...")
-                        time.sleep(30)
-                        continue
+                        add_log("WARN", udid, "[Proxy] Device blocked due to proxy failure. Waiting 60s before next round...")
+                        time.sleep(60)
+                        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                            break
+                        add_log("INFO", udid, "[Proxy] Retrying proxy validation for blocked device...")
+                        try:
+                            if _validate_device_proxy(udid, binded_proxy, conn_type):
+                                proxy_blocked_devices.discard(udid)
+                                add_log("SUCC", udid, "[Proxy] Device reconnected. Resuming playback.")
+                            else:
+                                add_log("WARN", udid, "[Proxy] Still blocked; will retry next round.")
+                                continue
+                        except Exception as e:
+                            add_log("ERR.", udid, f"[Proxy] Retry validation error: {e}")
+                            continue
                     try:
                         if not _validate_device_proxy(udid, binded_proxy, conn_type):
-                            add_log("ERR.", udid, "[Proxy] Proxy validation failed. Skipping device.")
-                            break
+                            add_log("ERR.", udid, "[Proxy] Proxy validation failed. Device stopped for this round; will retry.")
+                            continue
                         if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
                             break
                         _multi_app_start_all(apps, udid, binded_account, binded_proxy, conn_type, acc_type)
