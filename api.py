@@ -6795,12 +6795,12 @@ def _ensure_super_proxy_detail(udid):
 
 
 def _screencap_color_check(udid):
-    """Take a screenshot and check the toggle button color area.
-    Returns ('disconnected', x, y) if green/blue button (Start = needs tap),
-    ('connected', x, y) if red/orange button (Stop = already active),
-    ('neutral', x, y) if white/black/gray (connected),
-    ('unknown', 0, 0) if cannot determine.
-    Returns the center coordinates of the colored area for tapping."""
+    """Take a screenshot and scan the FULL screen for colored toggle button.
+    Flutter/uiautomator bounds are unreliable; we find the button visually.
+    Returns ('disconnected', x, y) if green/blue (Start),
+    ('connected', x, y) if red/orange (Stop),
+    ('neutral', x, y) if no colored button (connected),
+    ('unknown', 0, 0) if cannot determine."""
     try:
         import tempfile, os
         from PIL import Image
@@ -6817,6 +6817,7 @@ def _screencap_color_check(udid):
         if not os.path.exists(local):
             return ('unknown', 0, 0)
         img = Image.open(local)
+        w, h = img.size
         disconnected_xs = []
         disconnected_ys = []
         connected_xs = []
@@ -6824,8 +6825,8 @@ def _screencap_color_check(udid):
         neutral_count = 0
         green_count = 0
         red_count = 0
-        for y in range(1490, 1680, 6):
-            for x in range(40, 1040, 20):
+        for y in range(200, h - 200, 8):
+            for x in range(40, w - 40, 20):
                 r, g, b = img.getpixel((x, y))[:3]
                 mx = max(r, g, b)
                 mn = min(r, g, b)
@@ -6858,7 +6859,7 @@ def _screencap_color_check(udid):
             tap_x = connected_xs[len(connected_xs) // 2]
             tap_y = connected_ys[len(connected_ys) // 2]
             return ('connected', tap_x, tap_y)
-        return ('neutral', 540, 1587)
+        return ('neutral', 0, 0)
     except Exception as e:
         add_log("WARN", udid, f"[Proxy] Color check failed: {e}")
         return ('unknown', 0, 0)
@@ -6899,7 +6900,7 @@ def _check_super_proxy_ui(udid):
     xml = _dump_super_proxy_ui(udid)
     if xml:
         xml = _ensure_super_proxy_detail(udid, xml)
-    if not xml or not _find_ui_button(xml, ['Stop', 'Running', 'Disconnect', 'Start', 'Connect']):
+    if not xml:
         add_log("WARN", udid, "[Proxy] Could not reach detail view; skipping color check.")
         return False
     time.sleep(1)
@@ -6908,11 +6909,10 @@ def _check_super_proxy_ui(udid):
         return True
     if color == 'disconnected':
         return False
-    if xml:
-        if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
-            return True
-        if _find_ui_button(xml, ['Start', 'Connect']):
-            return False
+    if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
+        return True
+    if _find_ui_button(xml, ['Start', 'Connect']):
+        return False
     return False
 
 
@@ -6934,7 +6934,7 @@ def _tap_super_proxy_start(udid):
     xml = _dump_super_proxy_ui(udid)
     if xml:
         xml = _ensure_super_proxy_detail(udid, xml)
-    if not xml or not _find_ui_button(xml, ['Stop', 'Running', 'Disconnect', 'Start', 'Connect']):
+    if not xml:
         add_log("WARN", udid, "[Proxy] Could not reach detail view; not touching toggle.")
         return False
     time.sleep(1)
@@ -6942,16 +6942,16 @@ def _tap_super_proxy_start(udid):
     if color == 'neutral' or color == 'connected':
         add_log("INFO", udid, f"[Proxy] Color={color.upper()} (already active) - does NOT touch toggle.")
         return False
-    if color == 'disconnected':
+    if color == 'disconnected' and tap_x > 0 and tap_y > 0:
         subprocess.run(
             [adb_path, '-s', udid, 'shell', 'input', 'tap', str(tap_x), str(tap_y)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
         )
         add_log("INFO", udid, f"[Proxy] Color=GREEN (disconnected) + tapped toggle at ({tap_x},{tap_y}) to CONNECT.")
         return True
-    if xml:
+    if _find_ui_button(xml, ['Start', 'Connect']):
         start_btn = _find_ui_button(xml, ['Start', 'Connect'])
-        if start_btn:
+        if start_btn and start_btn[0] > 0 and start_btn[1] > 0:
             subprocess.run(
                 [adb_path, '-s', udid, 'shell', 'input', 'tap', str(start_btn[0]), str(start_btn[1])],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
