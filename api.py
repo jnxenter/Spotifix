@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "Spotifix"
 global_bot_name = "SpotiFix"
-Bot_version = "4.6.15"
+Bot_version = "4.6.16"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -6844,6 +6844,46 @@ def _ensure_super_proxy_detail(udid, xml=None):
     return None
 
 
+def _proxy_screencap_image(udid):
+    """Return a PIL Image of the device screen, resilient to flaky pulls.
+    Tries screencap-to-file with retry + PNG header validation, then falls
+    back to exec-out (PNG bytes parsed in-memory via _decode_screenshot).
+    Returns None if no readable screenshot was obtained."""
+    import tempfile, os
+    from PIL import Image
+    remote = '/data/local/tmp/_sp_sc.png'
+    local = os.path.join(tempfile.gettempdir(), '_sp_sc.png')
+    for attempt in range(2):
+        try:
+            subprocess.run(
+                [adb_path, '-s', udid, 'shell', 'screencap', '-p', remote],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, startupinfo=startupinfo
+            )
+            subprocess.run(
+                [adb_path, '-s', udid, 'pull', remote, local],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, startupinfo=startupinfo
+            )
+            if os.path.exists(local) and os.path.getsize(local) > 0:
+                with open(local, 'rb') as f:
+                    header = f.read(8)
+                if header == b'\x89PNG\r\n\x1a\n':
+                    img = Image.open(local)
+                    img.load()
+                    return img
+        except Exception:
+            pass
+        time.sleep(1)
+    dec = _decode_screenshot(udid)
+    if dec:
+        width, height, bpp, raw = dec
+        try:
+            mode = 'RGB' if bpp == 3 else 'RGBA'
+            return Image.frombytes(mode, (width, height), bytes(raw))
+        except Exception:
+            pass
+    return None
+
+
 def _screencap_color_check(udid):
     """Take a screenshot and scan the FULL screen for colored toggle button.
     Flutter/uiautomator bounds are unreliable; we find the button visually.
@@ -6852,21 +6892,10 @@ def _screencap_color_check(udid):
     ('neutral', x, y) if no colored button (connected),
     ('unknown', 0, 0) if cannot determine."""
     try:
-        import tempfile, os
-        from PIL import Image
-        remote = '/data/local/tmp/_sp_sc.png'
-        local = os.path.join(tempfile.gettempdir(), '_sp_sc.png')
-        subprocess.run(
-            [adb_path, '-s', udid, 'shell', 'screencap', '-p', remote],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, startupinfo=startupinfo
-        )
-        subprocess.run(
-            [adb_path, '-s', udid, 'pull', remote, local],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10, startupinfo=startupinfo
-        )
-        if not os.path.exists(local):
+        img = _proxy_screencap_image(udid)
+        if img is None:
+            add_log("WARN", udid, "[Proxy] Color check failed: no readable screenshot after retries.")
             return ('unknown', 0, 0)
-        img = Image.open(local)
         w, h = img.size
         disconnected_xs = []
         disconnected_ys = []
