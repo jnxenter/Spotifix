@@ -1061,7 +1061,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     headers: { 'Authorization': 'Bearer ' + authToken }
                 })
                 .then(r => r.json())
-                .then(d => { if (versionLabel && d.version) versionLabel.textContent = 'Current version: ' + d.version; })
+                .then(d => {
+                    if (versionLabel && d.version) versionLabel.textContent = 'Current version: ' + d.version;
+                    if (d.version) document.title = 'SpotiFix ' + d.version;
+                    const headLabel = document.getElementById('appVersionLabel');
+                    if (headLabel && d.version) headLabel.textContent = 'Spotifix ' + d.version;
+                })
                 .catch(() => {});
 
                 let pendingRemoteVersion = null;
