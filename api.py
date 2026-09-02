@@ -6850,15 +6850,17 @@ def _screencap_color_check(udid):
             return ('unknown', 0, 0)
         green_pct = green_count * 100 // total
         red_pct = red_count * 100 // total
-        add_log("INFO", udid, f"[Proxy] Color check: green={green_pct}% red={red_pct}% neutral={neutral_count}")
-        if green_pct > 15 and disconnected_xs:
-            tap_x = disconnected_xs[len(disconnected_xs) // 2]
-            tap_y = disconnected_ys[len(disconnected_ys) // 2]
-            return ('disconnected', tap_x, tap_y)
-        if red_pct > 15 and connected_xs:
-            tap_x = connected_xs[len(connected_xs) // 2]
-            tap_y = connected_ys[len(connected_ys) // 2]
-            return ('connected', tap_x, tap_y)
+        add_log("INFO", udid, f"[Proxy] Color check: green={green_pct}%({green_count}) red={red_pct}%({red_count}) neutral={neutral_count}")
+        colored_total = green_count + red_count
+        if colored_total > 5:
+            if green_count > red_count * 2:
+                tap_x = disconnected_xs[len(disconnected_xs) // 2] if disconnected_xs else 0
+                tap_y = disconnected_ys[len(disconnected_ys) // 2] if disconnected_ys else 0
+                return ('disconnected', tap_x, tap_y)
+            if red_count > green_count * 2:
+                tap_x = connected_xs[len(connected_xs) // 2] if connected_xs else 0
+                tap_y = connected_ys[len(connected_ys) // 2] if connected_ys else 0
+                return ('connected', tap_x, tap_y)
         return ('neutral', 0, 0)
     except Exception as e:
         add_log("WARN", udid, f"[Proxy] Color check failed: {e}")
