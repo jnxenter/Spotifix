@@ -6825,7 +6825,8 @@ def _screencap_color_check(udid):
         neutral_count = 0
         green_count = 0
         red_count = 0
-        for y in range(200, h - 200, 8):
+        scan_bottom = int(h * 0.65)
+        for y in range(200, scan_bottom, 8):
             for x in range(40, w - 40, 20):
                 r, g, b = img.getpixel((x, y))[:3]
                 mx = max(r, g, b)
@@ -6885,12 +6886,13 @@ def _ensure_super_proxy_detail(udid, xml):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
             )
             add_log("INFO", udid, f"[Proxy] Tapped proxy card '>' arrow '{m.group(1)}' at ({tap_x},{tap_y}) attempt {attempt+1}.")
-            time.sleep(3)
-            new_xml = _dump_super_proxy_ui(udid)
-            if new_xml and _find_ui_button(new_xml, ['Stop', 'Running', 'Disconnect', 'Start', 'Connect']):
-                return new_xml
+            time.sleep(4)
+            color, cx, cy = _screencap_color_check(udid)
+            if color in ('disconnected', 'connected'):
+                add_log("INFO", udid, f"[Proxy] Attempt {attempt+1}: entered detail view (color={color}).")
+                return f"<detail-view color='{color}'/>"
             add_log("WARN", udid, f"[Proxy] Attempt {attempt+1}: still in list view, retrying...")
-            xml = new_xml if new_xml else xml
+            xml = _dump_super_proxy_ui(udid) or xml
         else:
             break
     return None
@@ -6910,10 +6912,6 @@ def _check_super_proxy_ui(udid):
     if color == 'neutral' or color == 'connected':
         return True
     if color == 'disconnected':
-        return False
-    if _find_ui_button(xml, ['Stop', 'Running', 'Disconnect']):
-        return True
-    if _find_ui_button(xml, ['Start', 'Connect']):
         return False
     return False
 
@@ -6951,15 +6949,6 @@ def _tap_super_proxy_start(udid):
         )
         add_log("INFO", udid, f"[Proxy] Color=GREEN (disconnected) + tapped toggle at ({tap_x},{tap_y}) to CONNECT.")
         return True
-    if _find_ui_button(xml, ['Start', 'Connect']):
-        start_btn = _find_ui_button(xml, ['Start', 'Connect'])
-        if start_btn and start_btn[0] > 0 and start_btn[1] > 0:
-            subprocess.run(
-                [adb_path, '-s', udid, 'shell', 'input', 'tap', str(start_btn[0]), str(start_btn[1])],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo
-            )
-            add_log("INFO", udid, f"[Proxy] Color unknown but UI shows Start; tapped toggle at {start_btn}.")
-            return True
     add_log("WARN", udid, "[Proxy] Could not determine proxy state; not touching toggle.")
     return False
 
