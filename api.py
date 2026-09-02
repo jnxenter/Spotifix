@@ -6825,8 +6825,7 @@ def _screencap_color_check(udid):
         neutral_count = 0
         green_count = 0
         red_count = 0
-        scan_bottom = int(h * 0.65)
-        for y in range(200, scan_bottom, 8):
+        for y in range(240, h - 60, 8):
             for x in range(40, w - 40, 20):
                 r, g, b = img.getpixel((x, y))[:3]
                 mx = max(r, g, b)
@@ -6849,18 +6848,23 @@ def _screencap_color_check(udid):
         total = green_count + red_count + neutral_count
         if total == 0:
             return ('unknown', 0, 0)
-        green_pct = green_count * 100 // total
-        red_pct = red_count * 100 // total
-        add_log("INFO", udid, f"[Proxy] Color check: green={green_pct}%({green_count}) red={red_pct}%({red_count}) neutral={neutral_count}")
-        colored_total = green_count + red_count
-        if colored_total > 5:
-            if green_count > red_count * 2:
-                tap_x = disconnected_xs[len(disconnected_xs) // 2] if disconnected_xs else 0
-                tap_y = disconnected_ys[len(disconnected_ys) // 2] if disconnected_ys else 0
+        add_log("INFO", udid, f"[Proxy] Color check: green={green_count} red={red_count} neutral={neutral_count}")
+        min_span = int(w * 0.45)
+        if disconnected_xs:
+            xs = sorted(disconnected_xs)
+            span = xs[-1] - xs[0]
+            if green_count > red_count * 2 and green_count >= 20 and span > min_span:
+                tap_x = disconnected_xs[len(disconnected_xs) // 2]
+                tap_y = disconnected_ys[len(disconnected_ys) // 2]
+                add_log("INFO", udid, f"[Proxy] GREEN wide button detected span={span}px -> disconnected at ({tap_x},{tap_y})")
                 return ('disconnected', tap_x, tap_y)
-            if red_count > green_count * 2:
-                tap_x = connected_xs[len(connected_xs) // 2] if connected_xs else 0
-                tap_y = connected_ys[len(connected_ys) // 2] if connected_ys else 0
+        if connected_xs:
+            xs = sorted(connected_xs)
+            span = xs[-1] - xs[0]
+            if red_count > green_count * 2 and red_count >= 20 and span > min_span:
+                tap_x = connected_xs[len(connected_xs) // 2]
+                tap_y = connected_ys[len(connected_ys) // 2]
+                add_log("INFO", udid, f"[Proxy] RED wide button detected span={span}px -> connected at ({tap_x},{tap_y})")
                 return ('connected', tap_x, tap_y)
         return ('neutral', 0, 0)
     except Exception as e:
