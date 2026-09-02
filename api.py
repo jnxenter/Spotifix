@@ -6523,6 +6523,7 @@ def _open_super_proxy(udid):
     # Si la app ya esta al frente, no relanzar ni esperar (para no frenar bucles
     # de polling que llaman a _check_super_proxy_ui cada pocos segundos).
     try:
+        _wake_screen_via_adb(udid)
         if _is_super_proxy_foreground(udid):
             return True
         subprocess.run(
@@ -6533,6 +6534,21 @@ def _open_super_proxy(udid):
         return True
     except:
         return False
+
+
+def _wake_screen_via_adb(udid):
+    """Despierta pantalla y quita el keyguard sin depender de uiautomator.
+    Critico para ciclos de 24h: si la pantalla se apago, uiautomator/screencap
+    fallan y el proxy quedaria bloqueado sin motivo real."""
+    try:
+        subprocess.run([adb_path, '-s', udid, 'shell', 'svc', 'power', 'stayon', 'true'],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+        subprocess.run([adb_path, '-s', udid, 'shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+        subprocess.run([adb_path, '-s', udid, 'shell', 'wm', 'dismiss-keyguard'],
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
+    except:
+        pass
 
 
 def _dump_super_proxy_ui(udid):
@@ -8045,6 +8061,7 @@ def main_function(config_data):
                 while True:
                     if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
                         break
+                    validation_ok = None
                     if udid in proxy_blocked_devices:
                         add_log("WARN", udid, "[Proxy] Device blocked due to proxy failure. Waiting 60s before next round...")
                         time.sleep(60)
@@ -8054,6 +8071,7 @@ def main_function(config_data):
                         try:
                             if _validate_device_proxy(udid, binded_proxy, conn_type):
                                 proxy_blocked_devices.discard(udid)
+                                validation_ok = True
                                 add_log("SUCC", udid, "[Proxy] Device reconnected. Resuming playback.")
                             else:
                                 add_log("WARN", udid, "[Proxy] Still blocked; will retry next round.")
@@ -8062,9 +8080,10 @@ def main_function(config_data):
                             add_log("ERR.", udid, f"[Proxy] Retry validation error: {e}")
                             continue
                     try:
-                        if not _validate_device_proxy(udid, binded_proxy, conn_type):
-                            add_log("ERR.", udid, "[Proxy] Proxy validation failed. Device stopped for this round; will retry.")
-                            continue
+                        if validation_ok is None:
+                            if not _validate_device_proxy(udid, binded_proxy, conn_type):
+                                add_log("ERR.", udid, "[Proxy] Proxy validation failed. Device stopped for this round; will retry.")
+                                continue
                         if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
                             break
                         _multi_app_start_all(apps, udid, binded_account, binded_proxy, conn_type, acc_type)
