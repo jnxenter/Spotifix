@@ -4406,6 +4406,22 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
         else:
             finalplaytime = finalplaytime - 5
             sleep(finalplaytime)
+        # STRICT counting: only count the stream if the player REALLY ended up
+        # PLAYING (audio advancing). Try once to recover a transient pause, but
+        # never count a track that is not actually playing (avoids false plays).
+        _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+        if _np_state != 'PLAYING':
+            try:
+                _dismiss_any_banner(d, udid, "Spotify")
+            except Exception:
+                pass
+            time.sleep(4)
+            _adb_media_play(udid)
+            time.sleep(5)
+            _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+        if _np_state != 'PLAYING':
+            add_log("WARN", udid, f"[Spotify] Not really PLAYING ({_np_state}) at end of playtime; NOT counting stream (strict).")
+            return True, ppa, d
         global worker_streams_done, worker_streams_done_spotify
         worker_streams_done += 1
         worker_streams_done_spotify += 1
@@ -7412,12 +7428,29 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
                         add_log("INFO", udid, f"[MultiApp] [{display_name}] Still not PLAYING; sent NEXT...")
                         time.sleep(6)
                         _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
-                # Multi Sound sessions often report BUFFERING/PAUSED for a moment
-                # during track changes even though audio keeps playing. Only count
-                # if the session has metadata (title) and state is PLAYING/BUFFERING/PAUSED.
-                _countable = _np_state == 'PLAYING' or (_np_state in ('BUFFERING', 'PAUSED') and _np_title)
+                # STRICT counting: only count a real PLAYING (audio advancing).
+                # Multi Sound sessions can report BUFFERING/PAUSED for a moment
+                # during track changes even though audio keeps playing, so if we
+                # have metadata (title) AND the state is BUFFERING/PAUSED we give
+                # one extra chance (dismiss + brief wait + re-check). But we never
+                # count unless the session ends up PLAYING - this removes the
+                # false reproductions that were inflating/degrading the play count.
+                _countable = _np_state == 'PLAYING'
+                if not _countable and _np_title and _np_state in ('BUFFERING', 'PAUSED'):
+                    try:
+                        ui_lock = _get_device_ui_lock(udid)
+                        ui_lock.acquire()
+                        try:
+                            _dismiss_any_banner(ua.connect(udid), udid, display_name)
+                        finally:
+                            ui_lock.release()
+                    except Exception:
+                        pass
+                    time.sleep(4)
+                    _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+                    _countable = _np_state == 'PLAYING'
                 if not _countable:
-                    add_log("WARN", udid, f"[MultiApp] [{display_name}] Not PLAYING ({_np_state}) at end of playtime; not counting stream.")
+                    add_log("WARN", udid, f"[MultiApp] [{display_name}] Not really PLAYING ({_np_state}) at end of playtime; NOT counting stream (strict).")
                     app_timers[app_key] = now
                     app_next_action_time[app_key] = now + random.uniform(15, 35)
                     continue
