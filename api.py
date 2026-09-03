@@ -5176,6 +5176,26 @@ def _stop_app_via_adb(udid, pkg):
     _adb_shell(udid, f'am force-stop {pkg}')
 
 
+def _strict_force_stop(udid, pkg, attempts=3):
+    """Force-stop a package strictly: retry until the process is really gone,
+    so a slow/busy device can't leave the app running (which kept streaming
+    after the timer PARADA on some phones)."""
+    import time as _t
+    for attempt in range(attempts):
+        try:
+            _adb_shell(udid, f'am force-stop {pkg}')
+        except Exception:
+            pass
+        _t.sleep(1)
+        try:
+            check = _adb_shell(udid, f'pidof {pkg}')
+            if not check or not check.strip():
+                return True
+        except Exception:
+            return True
+    return False
+
+
 # ── Human-like helpers ───────────────────────────────────────────────
 
 def _human_delay(min_s=0.3, max_s=1.2):
@@ -8857,20 +8877,32 @@ def _stop_bot():
             for line in lines:
                 if '\tdevice' not in line and '   device ' not in line:
                     continue
-                parts = line.split()
-                udid = parts[0]
-                if not udid.startswith('127.0.0.1:'):
-                    udids.append(udid)
-                else:
-                    udids.append(udid)
+                udids.append(line.split()[0])
+            # STRICT close: enumerate EVERY installed package (base + clones/patched)
+            # per app on every device, force-stop each one, reinforce with a media
+            # PAUSE and WAKEUP, and retry on failure so no device keeps playing.
+            apps_meta = [('spotify', 'com.spotify.music'), ('tidal', 'com.aspiro.tidal'), ('apple_music', 'com.apple.android.music')]
+            closed_total = 0
             for udid in udids:
-                for pkg in apps_to_close:
+                for app_key, _base in apps_meta:
                     try:
-                        subprocess.run([adb_path, '-s', udid, 'shell', 'am', 'force-stop', pkg],
-                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
-                    except:
-                        pass
-            _timer_log(f"Apps cerradas en {len(udids)} dispositivos: Spotify, Tidal, Apple Music")
+                        pkgs = _installed_pkgs_for_app(udid, app_key)
+                        if not pkgs:
+                            pkgs = [_base]
+                        for pkg in pkgs:
+                            _strict_force_stop(udid, pkg)
+                            closed_total += 1
+                    except Exception as e:
+                        _timer_log(f"Error cerrando {app_key} en {udid}: {e}")
+                try:
+                    _adb_shell(udid, 'media dispatch pause')
+                except Exception:
+                    pass
+                try:
+                    _adb_shell(udid, 'input keyevent KEYCODE_WAKEUP')
+                except Exception:
+                    pass
+            _timer_log(f"Apps cerradas estrictamente en {len(udids)} dispositivos ({closed_total} paquetes): Spotify, Tidal, Apple Music")
         except Exception as e:
             _timer_log(f"Error cerrando apps: {e}")
     except Exception as e:
