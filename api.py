@@ -1978,18 +1978,10 @@ def get_streams_done():
 
 
 def freeze_rotation_port(d):
-    try:
-        orientation = d.orientation
-        if orientation != 'natural':
-            d.freeze_rotation(False)
-            d.set_orientation("n")
-            d.freeze_rotation()
-            d.shell("settings put system accelerometer_rotation 0")
-            d.shell("content insert --uri content://settings/system --bind name:s:user_rotation --bind value:i:0")
-            d.shell("settings put system user_rotation 0")
-            d.freeze_rotation()
-    except:
-        pass
+    # DISABLED: forcing the screen to portrait / disabling auto-rotation was
+    # hurting Spotify playback (fewer plays). We never touch rotation now, so
+    # the devices keep auto-rotate as configured by the user.
+    pass
 
 def ensure_screen_on(d):
     """Keep the device screen awake and turn it on safely if it is off.
