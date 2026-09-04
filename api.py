@@ -87,9 +87,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-Bot_name = "Spotifix"
-global_bot_name = "SpotiFix"
-Bot_version = "4.6.16"
+Bot_name = "SonicPush STA"
+global_bot_name = "SonicPush STA"
+Bot_version = "5.0.1"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -1748,7 +1748,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('Spotifix 4.0.0 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.0.1 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -1978,10 +1978,18 @@ def get_streams_done():
 
 
 def freeze_rotation_port(d):
-    # DISABLED: forcing the screen to portrait / disabling auto-rotation was
-    # hurting Spotify playback (fewer plays). We never touch rotation now, so
-    # the devices keep auto-rotate as configured by the user.
-    pass
+    try:
+        orientation = d.orientation
+        if orientation != 'natural':
+            d.freeze_rotation(False)
+            d.set_orientation("n")
+            d.freeze_rotation()
+            d.shell("settings put system accelerometer_rotation 0")
+            d.shell("content insert --uri content://settings/system --bind name:s:user_rotation --bind value:i:0")
+            d.shell("settings put system user_rotation 0")
+            d.freeze_rotation()
+    except:
+        pass
 
 def ensure_screen_on(d):
     """Keep the device screen awake and turn it on safely if it is off.
@@ -3114,12 +3122,12 @@ def run_spotify_patch():
             base_dir = _bundle_app_dir()
         tools_dir = os.path.join(base_dir, 'Tools')
         patcher_file = os.path.join(base_dir, 'SpotifyPatcher.py')
-        add_log("INFO", "Spotifix", f"Fix screen iniciado. Tools: {tools_dir}")
+        add_log("INFO", "SonicPush", f"Fix screen iniciado. Tools: {tools_dir}")
         if not os.path.isfile(patcher_file):
-            add_log("ERR.", "Spotifix", "No se encontró el módulo del fix screen.")
+            add_log("ERR.", "SonicPush", "No se encontró el módulo del fix screen.")
             return
         if not os.path.isdir(tools_dir):
-            add_log("ERR.", "Spotifix", f"No se encontró la carpeta Tools en {tools_dir}")
+            add_log("ERR.", "SonicPush", f"No se encontró la carpeta Tools en {tools_dir}")
             return
         import importlib.util
         spec = importlib.util.spec_from_file_location('SpotifyPatcher', patcher_file)
@@ -3128,9 +3136,9 @@ def run_spotify_patch():
 
         serials = _list_adb_serial()
         if not serials:
-            add_log("ERR.", "Spotifix", "No se detectaron dispositivos ADB conectados.")
+            add_log("ERR.", "SonicPush", "No se detectaron dispositivos ADB conectados.")
             return
-        add_log("INFO", "Spotifix", f"Dispositivos detectados: {len(serials)}")
+        add_log("INFO", "SonicPush", f"Dispositivos detectados: {len(serials)}")
 
         patch_root = os.path.join(files, 'SpotifyPatch')
         os.makedirs(patch_root, exist_ok=True)
@@ -3170,7 +3178,7 @@ def run_spotify_patch():
                 add_log("WARN", serial, f"No se pudo obtener el APK: {e}")
 
         if not base_apk or not os.path.isfile(base_apk):
-            add_log("ERR.", "Spotifix", "No se pudo obtener un APK de Spotify instalado. Instala Spotify en algún dispositivo y reintenta.")
+            add_log("ERR.", "SonicPush", "No se pudo obtener un APK de Spotify instalado. Instala Spotify en algún dispositivo y reintenta.")
             return
 
         import hashlib
@@ -3187,17 +3195,17 @@ def run_spotify_patch():
             # configuración y Spotify crasheaba (Resources$NotFoundException).
             patched_base = os.path.join(patch_root, f'spotify_patched_{base_sha}.apk')
             if os.path.isfile(patched_base):
-                add_log("INFO", "Spotifix", "Fix screen ya aplicado para esta versión, se reutiliza.")
+                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versión, se reutiliza.")
             else:
-                add_log("INFO", "Spotifix", "Aplicando fix screen a Spotify (quitar restricción de captura). Tarda unos minutos...")
+                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricción de captura). Tarda unos minutos...")
                 try:
                     ok, msg = patcher.patch_apk(base_apk, patched_base, tools_dir, os.path.join(patch_root, 'work'))
                     if not ok:
-                        add_log("ERR.", "Spotifix", f"Fallo al aplicar fix screen: {msg}")
+                        add_log("ERR.", "SonicPush", f"Fallo al aplicar fix screen: {msg}")
                         return
-                    add_log("INFO", "Spotifix", f"Fix screen aplicado correctamente: {msg}")
+                    add_log("INFO", "SonicPush", f"Fix screen aplicado correctamente: {msg}")
                 except Exception as e:
-                    add_log("ERR.", "Spotifix", f"Error al aplicar fix screen: {e}")
+                    add_log("ERR.", "SonicPush", f"Error al aplicar fix screen: {e}")
                     return
             patched_splits = []
             for i, sp in enumerate(split_apks):
@@ -3207,7 +3215,7 @@ def run_spotify_patch():
                 except Exception as e:
                     ok, msg = False, repr(e)
                 if not ok:
-                    add_log("ERR.", "Spotifix", f"Fallo al firmar split {os.path.basename(sp)}: {msg}")
+                    add_log("ERR.", "SonicPush", f"Fallo al firmar split {os.path.basename(sp)}: {msg}")
                     return
                 patched_splits.append(out)
             install_files = [patched_base] + patched_splits
@@ -3223,27 +3231,27 @@ def run_spotify_patch():
                 ok, msg = patcher.merge_split_libs(base_apk, split_apks, abi, merged_apk,
                                                    os.path.join(patch_root, 'work'))
                 if not ok:
-                    add_log("ERR.", "Spotifix", f"Fallo al fusionar splits: {msg}")
+                    add_log("ERR.", "SonicPush", f"Fallo al fusionar splits: {msg}")
                     return
                 if split_apks:
-                    add_log("INFO", "Spotifix", f"Fusión de splits: {msg}")
+                    add_log("INFO", "SonicPush", f"Fusión de splits: {msg}")
                 base_apk = merged_apk
             except Exception as e:
-                add_log("ERR.", "Spotifix", f"Error al fusionar splits: {e}")
+                add_log("ERR.", "SonicPush", f"Error al fusionar splits: {e}")
                 return
             patched_apk = os.path.join(patch_root, f'spotify_patched_{base_sha}.apk')
             if os.path.isfile(patched_apk):
-                add_log("INFO", "Spotifix", "Fix screen ya aplicado para esta versión, se reutiliza.")
+                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versión, se reutiliza.")
             else:
-                add_log("INFO", "Spotifix", "Aplicando fix screen a Spotify (quitar restricción de captura). Tarda unos minutos...")
+                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricción de captura). Tarda unos minutos...")
                 try:
                     ok, msg = patcher.patch_apk(base_apk, patched_apk, tools_dir, os.path.join(patch_root, 'work'))
                     if not ok:
-                        add_log("ERR.", "Spotifix", f"Fallo al aplicar fix screen: {msg}")
+                        add_log("ERR.", "SonicPush", f"Fallo al aplicar fix screen: {msg}")
                         return
-                    add_log("INFO", "Spotifix", f"Fix screen aplicado correctamente: {msg}")
+                    add_log("INFO", "SonicPush", f"Fix screen aplicado correctamente: {msg}")
                 except Exception as e:
-                    add_log("ERR.", "Spotifix", f"Error al aplicar fix screen: {e}")
+                    add_log("ERR.", "SonicPush", f"Error al aplicar fix screen: {e}")
                     return
             install_files = [patched_apk]
 
@@ -3267,9 +3275,9 @@ def run_spotify_patch():
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             except Exception as e:
                 add_log("ERR.", serial, f"Error al reinstalar: {e}")
-        add_log("INFO", "Spotifix", "Fix screen finalizado.")
+        add_log("INFO", "SonicPush", "Fix screen finalizado.")
     except Exception as e:
-        add_log("ERR.", "Spotifix", f"Error inesperado al aplicar fix screen: {e}")
+        add_log("ERR.", "SonicPush", f"Error inesperado al aplicar fix screen: {e}")
 
 
 @app.route('/patch_spotify', methods=['POST'])
@@ -3458,13 +3466,13 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "Spotifix 4.0.0"
+                            "text": "SonicPush STA 5.0.1"
                         }
                     }
                 ],
                 "components": [],
                 "actions": {},
-                "username": "Spotifix"
+                "username": "SonicPush"
             }
             headers = {
                 'Content-Type': 'application/json'
@@ -4406,11 +4414,15 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
         else:
             finalplaytime = finalplaytime - 5
             sleep(finalplaytime)
-        # STRICT counting: only count the stream if the player REALLY ended up
-        # PLAYING (audio advancing). Try once to recover a transient pause, but
-        # never count a track that is not actually playing (avoids false plays).
+        # RELAXED strict counting: only count the stream if the player REALLY
+        # ended up PLAYING (audio advancing), but give the track up to 3
+        # recovery attempts (dismiss + media play) before giving up. This counts
+        # more streams than the previous single-retry strict check while still
+        # avoiding the false reproductions that degraded the play count.
         _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
-        if _np_state != 'PLAYING':
+        for _attempt in range(3):
+            if _np_state == 'PLAYING':
+                break
             try:
                 _dismiss_any_banner(d, udid, "Spotify")
             except Exception:
@@ -4420,7 +4432,7 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
             time.sleep(5)
             _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
         if _np_state != 'PLAYING':
-            add_log("WARN", udid, f"[Spotify] Not really PLAYING ({_np_state}) at end of playtime; NOT counting stream (strict).")
+            add_log("WARN", udid, f"[Spotify] Not really PLAYING ({_np_state}) after 3 retries; NOT counting stream (relaxed strict).")
             return True, ppa, d
         global worker_streams_done, worker_streams_done_spotify
         worker_streams_done += 1
@@ -5042,19 +5054,23 @@ def _app_generic_play_song(d, udid, pkg, display_name, ppa, songs_num):
 
         global worker_streams_done, worker_streams_done_spotify, worker_streams_done_tidal, worker_streams_done_apple, config_streams_to_do
 
+        # RELAXED strict counting: count if the player ends up PLAYING, giving
+        # up to 3 recovery attempts (dismiss + media play) before skipping.
         _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
-        if _np_state != 'PLAYING':
-            time.sleep(8)
-            _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
-        if _np_state != 'PLAYING':
+        for _attempt in range(3):
+            if _np_state == 'PLAYING':
+                break
             try:
                 _dismiss_any_banner(d, udid, display_name)
                 time.sleep(4)
+                _adb_media_play(udid)
+                time.sleep(5)
                 _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
             except Exception:
-                pass
+                time.sleep(8)
+                _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
         if _np_state != 'PLAYING':
-            add_log("WARN", udid, f"[{display_name}] Not PLAYING ({_np_state}) after wait; skipping stream without counting.")
+            add_log("WARN", udid, f"[{display_name}] Not PLAYING ({_np_state}) after 3 retries; skipping stream without counting (relaxed strict).")
             return True, ppa, d
 
         worker_streams_done += 1
@@ -6490,12 +6506,12 @@ def _send_proxy_alert(udid, proxy, message):
             return
         embed = {
             "content": "",
-            "username": "Spotifix - Proxy Alert",
+            "username": "SonicPush STA - Proxy Alert",
             "embeds": [{
                 "title": "Proxy Alert",
                 "description": f"**Device:** {udid}\n**Proxy:** {proxy or 'N/A'}\n**Message:** {message}",
                 "color": 16711680,
-                "footer": {"text": "Spotifix Proxy Monitor"}
+                "footer": {"text": "SonicPush STA Proxy Monitor"}
             }]
         }
         requests.post(config_webhook_url, json=embed, timeout=10)
@@ -7425,7 +7441,14 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
                     app_next_action_time[app_key] = now + random.uniform(15, 35)
                     continue
                 _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
-                if _np_state != 'PLAYING':
+                # RELAXED strict counting: only count a real PLAYING (audio
+                # advancing), but give up to 3 recovery attempts (dismiss +
+                # media play + next) so transient BUFFERING/PAUSED during track
+                # changes doesn't lose streams. Counts more than the old
+                # single-retry strict check without resurrecting false plays.
+                for _attempt in range(3):
+                    if _np_state == 'PLAYING':
+                        break
                     try:
                         ui_lock = _get_device_ui_lock(udid)
                         ui_lock.acquire()
@@ -7433,28 +7456,20 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
                             _dismiss_any_banner(ua.connect(udid), udid, display_name)
                         finally:
                             ui_lock.release()
-                        time.sleep(4)
-                        _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
                     except Exception:
                         pass
-                if _np_state != 'PLAYING':
-                    # Force RESUME: media play -> wait -> check; then NEXT as last resort
+                    time.sleep(4)
+                    add_log("INFO", udid, f"[MultiApp] [{display_name}] Not PLAYING; recovery attempt {_attempt + 1}/3 (PLAY + NEXT)...")
                     _adb_media_play(udid)
-                    add_log("INFO", udid, f"[MultiApp] [{display_name}] Not PLAYING; sent media PLAY, waiting...")
                     time.sleep(5)
                     _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
-                    if _np_state != 'PLAYING':
-                        _adb_media_next(udid)
-                        add_log("INFO", udid, f"[MultiApp] [{display_name}] Still not PLAYING; sent NEXT...")
-                        time.sleep(6)
-                        _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
-                # STRICT counting: only count a real PLAYING (audio advancing).
-                # Multi Sound sessions can report BUFFERING/PAUSED for a moment
-                # during track changes even though audio keeps playing, so if we
-                # have metadata (title) AND the state is BUFFERING/PAUSED we give
-                # one extra chance (dismiss + brief wait + re-check). But we never
-                # count unless the session ends up PLAYING - this removes the
-                # false reproductions that were inflating/degrading the play count.
+                    if _np_state == 'PLAYING':
+                        break
+                    _adb_media_next(udid)
+                    time.sleep(6)
+                    _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
+                # Last-chance: session with metadata (title) and a momentary
+                # BUFFERING/PAUSED still gets one extra dismiss+wait+recheck.
                 _countable = _np_state == 'PLAYING'
                 if not _countable and _np_title and _np_state in ('BUFFERING', 'PAUSED'):
                     try:
@@ -7470,7 +7485,7 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
                     _np_state, _np_title, _np_artist = _get_now_playing(udid, pkg)
                     _countable = _np_state == 'PLAYING'
                 if not _countable:
-                    add_log("WARN", udid, f"[MultiApp] [{display_name}] Not really PLAYING ({_np_state}) at end of playtime; NOT counting stream (strict).")
+                    add_log("WARN", udid, f"[MultiApp] [{display_name}] Not really PLAYING ({_np_state}) after 3 retries; NOT counting stream (relaxed strict).")
                     app_timers[app_key] = now
                     app_next_action_time[app_key] = now + random.uniform(15, 35)
                     continue
@@ -8490,6 +8505,58 @@ for _ak in ['all', 'spotify', 'tidal', 'apple']:
         "start_enabled": False, "start_hour": 8, "start_minute": 0, "start_triggered": False,
     }
 _per_app_timers["all"]["timezone"] = "America/Mexico_City"
+
+
+def _timer_cfg_path():
+    return os.path.join(project_dir, 'Files', 'timer_config.json')
+
+
+def _save_timer_config():
+    """Persist the fixed timer configuration (not the triggered transients)."""
+    try:
+        ser = {}
+        for _ak in _per_app_timers:
+            t = _per_app_timers[_ak]
+            ser[_ak] = {
+                "stop_enabled": t.get("stop_enabled", False),
+                "stop_hour": t.get("stop_hour", 22),
+                "stop_minute": t.get("stop_minute", 0),
+                "start_enabled": t.get("start_enabled", False),
+                "start_hour": t.get("start_hour", 8),
+                "start_minute": t.get("start_minute", 0),
+            }
+        ser["timezone"] = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+        p = _timer_cfg_path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'w', encoding='utf-8') as f:
+            json.dump(ser, f, indent=2)
+    except Exception:
+        pass
+
+
+def _load_timer_config():
+    """Load the last fixed timer configuration on boot (if present)."""
+    try:
+        p = _timer_cfg_path()
+        if not os.path.exists(p):
+            return
+        with open(p, 'r', encoding='utf-8') as f:
+            ser = json.load(f)
+        for _ak in _per_app_timers:
+            s = ser.get(_ak, {})
+            t = _per_app_timers[_ak]
+            for k in ("stop_enabled", "stop_hour", "stop_minute", "start_enabled", "start_hour", "start_minute"):
+                if k in s:
+                    t[k] = s[k]
+            t["stop_triggered"] = False
+            t["start_triggered"] = False
+        if "timezone" in ser:
+            _per_app_timers["all"]["timezone"] = ser["timezone"]
+    except Exception:
+        pass
+
+
+_load_timer_config()
 worker_app_paused = set()
 
 
@@ -8670,6 +8737,7 @@ def set_timer():
         _timer_log(f"[{app_key.upper()}] Parada activada: {t['stop_hour']:02d}:{t['stop_minute']:02d} ({tz})")
     if t["start_enabled"]:
         _timer_log(f"[{app_key.upper()}] Inicio activado: {t['start_hour']:02d}:{t['start_minute']:02d} ({tz})")
+    _save_timer_config()
     return jsonify({"success": True})
 
 
@@ -8686,6 +8754,7 @@ def cancel_timer():
     t["stop_triggered"] = False
     t["start_triggered"] = False
     _timer_log(f"[{app_key.upper()}] Temporizadores desactivados")
+    _save_timer_config()
     return jsonify({"success": True})
 
 
@@ -9137,7 +9206,7 @@ def install_update():
             except Exception:
                 pass
             bat_path = os.path.join(os.environ.get('TEMP', app_dir), '_spotifix_restart.bat')
-            exe_name = 'Spotifix.exe'
+            exe_name = 'SonicPush STA.exe'
             try:
                 bat_content = (
                     '@echo off\r\n'

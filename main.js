@@ -397,7 +397,7 @@ if (!gotTheLock) {
             }
         ]);
 
-        tray.setToolTip(`Spotifix`);
+        tray.setToolTip(`SonicPush STA`);
         tray.setContextMenu(contextMenu);
     }
 
@@ -405,15 +405,29 @@ if (!gotTheLock) {
         const apiExePath = path.join(appPath, 'api.exe');
         const apiExePathAlt = path.join(appPath, 'api', 'api.exe');
         const apiPyPath = path.join(appPath, 'api.py');
+        // Which backend binary to prefer?
+        //  - Use the bundled api.exe by default: self-contained Python, works
+        //    out-of-the-box on any Windows 10/11 even without python in PATH.
+        //  - BUT if api.py is NEWER than api/api.exe, it means the in-app
+        //    updater wrote a refreshed api.py that the exe doesn't have yet
+        //    -> run api.py with system python so that update takes effect.
+        const exeCandidates = [apiExePath, apiExePathAlt].filter(p => fs.existsSync(p));
+        const preferPy = fs.existsSync(apiPyPath) &&
+            exeCandidates.every(exe => {
+                try { return fs.statSync(apiPyPath).mtimeMs > fs.statSync(exe).mtimeMs; }
+                catch (e) { return false; }
+            });
         let proc;
-        // IMPORTANT: prefer python api.py so the in-app updater (which replaces
-        // api.py/main.js/etc. but NEVER api/api.exe) actually takes effect.
-        if (fs.existsSync(apiPyPath)) {
+        if (!preferPy && exeCandidates.length) {
+            const exe = exeCandidates[0];
+            const cwd = exe === apiExePathAlt ? path.join(appPath, 'api') : appPath;
+            proc = spawn(exe, [], { cwd });
+        } else if (fs.existsSync(apiPyPath)) {
             proc = spawn('python', [apiPyPath], { cwd: appPath });
-        } else if (fs.existsSync(apiExePath)) {
-            proc = spawn(apiExePath, [], { cwd: appPath });
-        } else if (fs.existsSync(apiExePathAlt)) {
-            proc = spawn(apiExePathAlt, [], { cwd: path.join(appPath, 'api') });
+        } else if (exeCandidates.length) {
+            const exe = exeCandidates[0];
+            const cwd = exe === apiExePathAlt ? path.join(appPath, 'api') : appPath;
+            proc = spawn(exe, [], { cwd });
         } else {
             proc = spawn('python', ['api.py']); // fallback
         }
@@ -592,7 +606,7 @@ if (!gotTheLock) {
 
     async function aiEnsureSession() {
         if (aiSessionId) return aiSessionId;
-        const res = await aiPost('/session', Object.assign({ title: 'Spotifix IA' }, aiPermissionRules()), 60000);
+        const res = await aiPost('/session', Object.assign({ title: 'SonicPush STA IA' }, aiPermissionRules()), 60000);
         aiSessionId = res.id;
         return aiSessionId;
     }

@@ -1063,9 +1063,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 .then(r => r.json())
                 .then(d => {
                     if (versionLabel && d.version) versionLabel.textContent = 'Current version: ' + d.version;
-                    if (d.version) document.title = 'SpotiFix ' + d.version;
+                    if (d.version) document.title = 'SonicPush STA ' + d.version;
                     const headLabel = document.getElementById('appVersionLabel');
-                    if (headLabel && d.version) headLabel.textContent = 'Spotifix ' + d.version;
+                    if (headLabel && d.version)                 headLabel.textContent = 'SonicPush STA ' + d.version;
                 })
                 .catch(() => {});
 
