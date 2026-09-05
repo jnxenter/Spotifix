@@ -956,7 +956,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('app-apple-music').checked = selectedApps.includes('apple_music');
                 document.getElementById('app-tidal').checked = selectedApps.includes('tidal');
 
+                document.getElementById('play-mode').value = config.play_mode || 'multi_sound';
+                const relayCfg = config.relay_minutes_by_app || {};
+                document.getElementById('relay-minutes-spotify').value = relayCfg.spotify || '';
+                document.getElementById('relay-minutes-apple').value = relayCfg.apple_music || '';
+                document.getElementById('relay-minutes-tidal').value = relayCfg.tidal || '';
+
                 toggleWebhook(document.getElementById('use-webhook'));
+                if (typeof toggleRelayFields === 'function') {
+                    toggleRelayFields();
+                }
             }
 
 
@@ -966,6 +975,19 @@ document.addEventListener('DOMContentLoaded', () => {
                     toggleWebhook(this);
                 });
             }
+
+            const playModeSelect = document.getElementById('play-mode');
+            const relayMinGroup = document.getElementById('relay-min-group');
+            function toggleRelayFields() {
+                const isRelay = playModeSelect && playModeSelect.value === 'relay';
+                if (relayMinGroup) {
+                    relayMinGroup.style.display = isRelay ? '' : 'none';
+                }
+            }
+            if (playModeSelect) {
+                playModeSelect.addEventListener('change', toggleRelayFields);
+            }
+            toggleRelayFields();
 
             // Initial call to set the correct visibility based on the initial state
             toggleWebhook(useWebhookCheckbox);
@@ -1578,6 +1600,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     session_time: document.getElementById('session-time').value,
                     validate_proxy: document.getElementById('validate-proxy').checked,
                     selected_apps: selectedApps,
+                    play_mode: document.getElementById('play-mode').value,
+                    relay_minutes_by_app: {
+                        spotify: document.getElementById('relay-minutes-spotify').value || '',
+                        apple_music: document.getElementById('relay-minutes-apple').value || '',
+                        tidal: document.getElementById('relay-minutes-tidal').value || ''
+                    },
                     webhook: {
                         use: document.getElementById('use-webhook').checked,
                         name: document.getElementById('webhook-name').value,

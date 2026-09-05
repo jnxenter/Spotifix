@@ -1280,7 +1280,7 @@
         <div class="card-container">
             <div class="card">
                 <h2>Applications</h2>
-                <p style="font-size:12px;color:#aaa;margin-bottom:8px;">Select which music apps to stream simultaneously on each device.</p>
+                <p style="font-size:12px;color:#aaa;margin-bottom:8px;">Select which music apps to stream on each device.</p>
                 <div class="form-group" style="display:flex;gap:16px;flex-wrap:wrap;">
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
                         <input type="checkbox" id="app-spotify" name="app-spotify" checked> Spotify
@@ -1291,6 +1291,25 @@
                     <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
                         <input type="checkbox" id="app-tidal" name="app-tidal"> Tidal
                     </label>
+                </div>
+                <div class="form-group" style="margin-top:10px;">
+                    <label for="play-mode">Play Mode:</label>
+                    <select id="play-mode" name="play-mode">
+                        <option value="multi_sound" selected>Multi Sound - Simultaneous (Sound Assistant)</option>
+                        <option value="relay">Relay - One at a time (alternate platforms)</option>
+                    </select>
+                </div>
+                <p style="font-size:12px;color:#aaa;margin:8px 0;">Relay minutes per platform (only used in Relay mode):</p>
+                <div class="form-group" id="relay-min-group">
+                    <div style="display:flex;gap:12px;flex-wrap:wrap;">
+                        <label for="relay-minutes-spotify">Spotify:</label>
+                        <input type="text" id="relay-minutes-spotify" name="relay-minutes-spotify" placeholder="30-45" style="width:70px;">
+                        <label for="relay-minutes-apple">Apple Music:</label>
+                        <input type="text" id="relay-minutes-apple" name="relay-minutes-apple" placeholder="30-45" style="width:70px;">
+                        <label for="relay-minutes-tidal">Tidal:</label>
+                        <input type="text" id="relay-minutes-tidal" name="relay-minutes-tidal" placeholder="30-45" style="width:70px;">
+                    </div>
+                    <p style="font-size:11px;color:#666;margin:6px 0;">Format: minutes range like 30-45. Each platform plays a random amount within its range before switching.</p>
                 </div>
             </div>
             <div class="card">

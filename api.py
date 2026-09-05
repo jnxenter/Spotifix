@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.0.1"
+Bot_version = "5.2.1"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -767,7 +767,7 @@ def find_login_widgets(nodes):
         text = (n.get('text', '') + ' ' + n.get('contentDesc', '')).lower()
         cls = n.get('className', '')
         if 'EditText' in cls:
-            if 'pass' in rid or n.get('password') or (n.get('text') or '').lower() in ('contraseña', 'password', 'passwort'):
+            if 'pass' in rid or n.get('password') or (n.get('text') or '').lower() in ('contraseÃ±a', 'password', 'passwort'):
                 password = password or n
             elif 'email' in rid or 'user' in rid or 'username' in rid or email is None:
                 email = email or n
@@ -825,9 +825,9 @@ def _live_login_error(d, udid):
         nodes = dump_live_nodes(udid, d=d) if udid else []
         for n in nodes:
             t = (n.get('text', '') + ' ' + n.get('contentDesc', '')).lower()
-            if any(k in t for k in ('incorrect', 'contraseña no', 'contrasena no', 'no es correcta',
+            if any(k in t for k in ('incorrect', 'contraseÃ±a no', 'contrasena no', 'no es correcta',
                                     'invalid', 'falsch', 'isn\'t correct', 'doesn\'t match',
-                                    'combinación de correo')):
+                                    'combinaciÃ³n de correo')):
                 return True
         return False
     except Exception:
@@ -836,13 +836,13 @@ def _live_login_error(d, udid):
 
 def _spotify_code_screen_markers():
     """Text fragments that identify Spotify's email-verification-code screen."""
-    return ['introduce el código', 'introduce el codigo', 'te hemos enviado por correo',
+    return ['introduce el cÃ³digo', 'introduce el codigo', 'te hemos enviado por correo',
             'enter the code', 'code we sent', 'email a code', 'send you a code', 'verification code']
 
 
 def _spotify_password_fallback_texts():
     """Text fragments of the 'log in with password' link on the code screen."""
-    return ['iniciar sesión con contraseña', 'iniciar sesión con la contraseña',
+    return ['iniciar sesiÃ³n con contraseÃ±a', 'iniciar sesiÃ³n con la contraseÃ±a',
             'iniciar sesion con contrasena', 'log in with a password', 'log in with password',
             'log in with a password instead', 'use a password instead',
             'sign in with password', 'mit passwort anmelden', 'anmelden mit passwort']
@@ -983,7 +983,7 @@ def infer_spotify_ui_mapping(nodes, version=None):
         text = (n.get('text', '') + ' ' + n.get('contentDesc', '')).lower()
         rid_of.setdefault(suffix, n)
         if 'EditText' in cls:
-            if 'pass' in suffix or (n.get('text') or '').lower() in ('contraseña', 'password', 'passwort'):
+            if 'pass' in suffix or (n.get('text') or '').lower() in ('contraseÃ±a', 'password', 'passwort'):
                 mapping.setdefault('password_text', suffix)
             elif 'user' in suffix or 'username' in suffix or 'email' in suffix:
                 mapping.setdefault('username_text', suffix)
@@ -1666,6 +1666,15 @@ def start_stop_bot():
             if not config_selected_apps:
                 config_selected_apps = ['spotify']
 
+            global config_play_mode, config_relay_minutes_by_app
+            config_play_mode = str(config_data.get('play_mode', 'multi_sound')).strip().lower() or 'multi_sound'
+            if config_play_mode not in ('multi_sound', 'relay'):
+                config_play_mode = 'multi_sound'
+            raw_relay = config_data.get('relay_minutes_by_app', {})
+            if not isinstance(raw_relay, dict):
+                raw_relay = {}
+            config_relay_minutes_by_app = {str(k).strip(): str(v) for k, v in raw_relay.items()}
+
             webhook_config = config_data.get('webhook', {})
             config_use_webhook = str(webhook_config.get('use'))
             config_webhook_name = webhook_config.get('name')
@@ -1707,6 +1716,7 @@ def start_stop_bot():
 
             worker_bot_running = True
             _reset_stop_flags()
+            _start_rotation_keeper()
             bot_thread = threading.Thread(target=main_function, args=(config_data,))
             bot_thread.start()
 
@@ -1748,7 +1758,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.0.1 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.2.1 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -1990,6 +2000,74 @@ def freeze_rotation_port(d):
             d.freeze_rotation()
     except:
         pass
+
+
+_rotation_keeper_started = False
+_rotation_keeper_thread = None
+
+
+def _disable_auto_rotation(udid):
+    """Force-disable auto rotation on a device via adb shell (no u2 needed).
+    Keeps the system read as rotation-locked portrait regardless of app state."""
+    try:
+        _adb_shell(udid, 'settings put system accelerometer_rotation 0')
+        _adb_shell(udid, 'content insert --uri content://settings/system --bind name:s:user_rotation --bind value:i:0')
+        _adb_shell(udid, 'settings put system user_rotation 0')
+        return True
+    except Exception:
+        return False
+
+
+def _rotation_keeper_loop():
+    """Daemon thread: constantly keeps auto rotation OFF on ALL connected adb
+    devices. Some apps (Tidal/Spotify) re-enable auto rotate during their UI;
+    this loop sweeps every device every ~30-60s and locks it back to portrait.
+    Runs while the bot is active, and stops cleanly when the bot is stopped."""
+    global _rotation_keeper_started
+    add_log("INFO", "Main", "[RotationKeeper] Watching all devices; auto rotation will be kept OFF.")
+    while True:
+        try:
+            if not worker_bot_running:
+                _rotation_keeper_started = False
+                return
+            if stop_flags.get('all'):
+                _rotation_keeper_started = False
+                return
+            try:
+                result = subprocess.run(
+                    [adb_path, 'devices'],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10,
+                    startupinfo=startupinfo
+                )
+                lines = result.stdout.strip().splitlines()[1:]
+            except Exception:
+                lines = []
+            for line in lines:
+                if '\t' not in line:
+                    continue
+                udid, status = line.split('\t')
+                if status != 'device':
+                    continue
+                try:
+                    _disable_auto_rotation(udid)
+                except Exception:
+                    pass
+            time.sleep(random.uniform(30, 60))
+        except Exception:
+            time.sleep(30)
+
+
+def _start_rotation_keeper():
+    """Start the rotation keeper daemon (idempotent)."""
+    global _rotation_keeper_started, _rotation_keeper_thread
+    try:
+        if _rotation_keeper_started and _rotation_keeper_thread and _rotation_keeper_thread.is_alive():
+            return
+        _rotation_keeper_started = True
+        _rotation_keeper_thread = threading.Thread(target=_rotation_keeper_loop, daemon=True)
+        _rotation_keeper_thread.start()
+    except Exception as e:
+        add_log("ERR.", "Main", f"[RotationKeeper] start failed: {e}")
 
 def ensure_screen_on(d):
     """Keep the device screen awake and turn it on safely if it is off.
@@ -2372,12 +2450,12 @@ def spotify_login(d, account, udid=None):
 
         time.sleep(5)
         ensure_ui_registered()
-        if udid and _live_click_text(d, udid, ('log in', 'iniciar sesión', 'iniciar sesion', 'anmelden')):
+        if udid and _live_click_text(d, udid, ('log in', 'iniciar sesiÃ³n', 'iniciar sesion', 'anmelden')):
             pass
         elif d(text="Log in").exists:
             d(text="Log in").click()
-        elif d(text="Iniciar sesión").exists:
-            d(text="Iniciar sesión").click()
+        elif d(text="Iniciar sesiÃ³n").exists:
+            d(text="Iniciar sesiÃ³n").click()
         elif d(text="Anmelden").exists:
             d(text="Anmelden").click()
         else:
@@ -2441,7 +2519,7 @@ def spotify_login(d, account, udid=None):
             # click the 'log in with a password' link directly if visible
             if _click_spotify_password_fallback(d, udid=udid):
                 _fell_back = True
-                print("password link: clicked 'Iniciar sesión con contraseña' fallback")
+                print("password link: clicked 'Iniciar sesiÃ³n con contraseÃ±a' fallback")
                 sleep(2)
                 break
             if not _on_spotify_code_screen(d, udid=udid) and not _live_has_password_fallback(d, udid):
@@ -2472,10 +2550,10 @@ def spotify_login(d, account, udid=None):
                 except Exception as e:
                     print(f"input text password error: {e}")
         sleep(0.3)
-        if udid and _live_click_text(d, udid, ('iniciar sesión', 'iniciar sesion', 'log in', 'anmelden')):
+        if udid and _live_click_text(d, udid, ('iniciar sesiÃ³n', 'iniciar sesion', 'log in', 'anmelden')):
             pass
-        elif d(text="Iniciar sesión").exists:
-            d(text="Iniciar sesión").click()
+        elif d(text="Iniciar sesiÃ³n").exists:
+            d(text="Iniciar sesiÃ³n").click()
         elif d(text="Log in").exists:
             d(text="Log in").click()
         elif d(text="Anmelden").exists:
@@ -2605,10 +2683,10 @@ def spotify_login(d, account, udid=None):
                                 else:
                                     d.shell(f"input text '{password}'")
                             sleep(0.3)
-                            if udid and _live_click_text(d, udid, ('iniciar sesión', 'iniciar sesion', 'log in', 'anmelden')):
+                            if udid and _live_click_text(d, udid, ('iniciar sesiÃ³n', 'iniciar sesion', 'log in', 'anmelden')):
                                 pass
-                            elif d(text="Iniciar sesión").exists:
-                                d(text="Iniciar sesión").click()
+                            elif d(text="Iniciar sesiÃ³n").exists:
+                                d(text="Iniciar sesiÃ³n").click()
                             elif d(text="Log in").exists:
                                 d(text="Log in").click()
                             elif d(text="Anmelden").exists:
@@ -2627,7 +2705,7 @@ def spotify_login(d, account, udid=None):
                 pass
 
             try:
-                if d(textContains="combinación de correo y contraseña es incorrecta").exists(timeout=1):
+                if d(textContains="combinaciÃ³n de correo y contraseÃ±a es incorrecta").exists(timeout=1):
                     print(f"wrong credentials")
                     invalid_creds = True
                     type = True
@@ -3124,10 +3202,10 @@ def run_spotify_patch():
         patcher_file = os.path.join(base_dir, 'SpotifyPatcher.py')
         add_log("INFO", "SonicPush", f"Fix screen iniciado. Tools: {tools_dir}")
         if not os.path.isfile(patcher_file):
-            add_log("ERR.", "SonicPush", "No se encontró el módulo del fix screen.")
+            add_log("ERR.", "SonicPush", "No se encontrÃ³ el mÃ³dulo del fix screen.")
             return
         if not os.path.isdir(tools_dir):
-            add_log("ERR.", "SonicPush", f"No se encontró la carpeta Tools en {tools_dir}")
+            add_log("ERR.", "SonicPush", f"No se encontrÃ³ la carpeta Tools en {tools_dir}")
             return
         import importlib.util
         spec = importlib.util.spec_from_file_location('SpotifyPatcher', patcher_file)
@@ -3157,7 +3235,7 @@ def run_spotify_patch():
                                    capture_output=True, text=True, startupinfo=startupinfo, timeout=60)
                 paths = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith('package:')]
                 if not paths:
-                    add_log("WARN", serial, "Spotify no está instalado en este dispositivo, se omite como origen.")
+                    add_log("WARN", serial, "Spotify no estÃ¡ instalado en este dispositivo, se omite como origen.")
                     continue
                 os.makedirs(splits_dir, exist_ok=True)
                 device_apks = [p[len('package:'):].strip() for p in paths]
@@ -3178,7 +3256,7 @@ def run_spotify_patch():
                 add_log("WARN", serial, f"No se pudo obtener el APK: {e}")
 
         if not base_apk or not os.path.isfile(base_apk):
-            add_log("ERR.", "SonicPush", "No se pudo obtener un APK de Spotify instalado. Instala Spotify en algún dispositivo y reintenta.")
+            add_log("ERR.", "SonicPush", "No se pudo obtener un APK de Spotify instalado. Instala Spotify en algÃºn dispositivo y reintenta.")
             return
 
         import hashlib
@@ -3186,18 +3264,18 @@ def run_spotify_patch():
             base_sha = hashlib.sha256(fh.read()).hexdigest()[:16]
 
         if split_apks:
-            # Instalación por splits (bundle de Play Store). El FLAG_SECURE vive
+            # InstalaciÃ³n por splits (bundle de Play Store). El FLAG_SECURE vive
             # en el dex del base; los splits llevan libs y recursos (p. ej.
             # split_config.xxhdpi contiene el drawable 'launcher_screen'). Se
             # modifica solo el base y se firman base + splits con el mismo
             # keystore para reinstalarlos juntos con install-multiple. Unir solo
-            # las libs en un APK único eliminaba los recursos de los splits de
-            # configuración y Spotify crasheaba (Resources$NotFoundException).
+            # las libs en un APK Ãºnico eliminaba los recursos de los splits de
+            # configuraciÃ³n y Spotify crasheaba (Resources$NotFoundException).
             patched_base = os.path.join(patch_root, f'spotify_patched_{base_sha}.apk')
             if os.path.isfile(patched_base):
-                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versión, se reutiliza.")
+                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versiÃ³n, se reutiliza.")
             else:
-                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricción de captura). Tarda unos minutos...")
+                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricciÃ³n de captura). Tarda unos minutos...")
                 try:
                     ok, msg = patcher.patch_apk(base_apk, patched_base, tools_dir, os.path.join(patch_root, 'work'))
                     if not ok:
@@ -3220,7 +3298,7 @@ def run_spotify_patch():
                 patched_splits.append(out)
             install_files = [patched_base] + patched_splits
         else:
-            # APK único (universal): unir splits es no-op; se modifica y se instala.
+            # APK Ãºnico (universal): unir splits es no-op; se modifica y se instala.
             try:
                 abi = ''
                 if source_serial:
@@ -3234,16 +3312,16 @@ def run_spotify_patch():
                     add_log("ERR.", "SonicPush", f"Fallo al fusionar splits: {msg}")
                     return
                 if split_apks:
-                    add_log("INFO", "SonicPush", f"Fusión de splits: {msg}")
+                    add_log("INFO", "SonicPush", f"FusiÃ³n de splits: {msg}")
                 base_apk = merged_apk
             except Exception as e:
                 add_log("ERR.", "SonicPush", f"Error al fusionar splits: {e}")
                 return
             patched_apk = os.path.join(patch_root, f'spotify_patched_{base_sha}.apk')
             if os.path.isfile(patched_apk):
-                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versión, se reutiliza.")
+                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versiÃ³n, se reutiliza.")
             else:
-                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricción de captura). Tarda unos minutos...")
+                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricciÃ³n de captura). Tarda unos minutos...")
                 try:
                     ok, msg = patcher.patch_apk(base_apk, patched_apk, tools_dir, os.path.join(patch_root, 'work'))
                     if not ok:
@@ -3264,7 +3342,7 @@ def run_spotify_patch():
                 add_log("INFO", serial, "Desinstalando Spotify original...")
                 subprocess.run([adb_path, '-s', serial, 'uninstall', 'com.spotify.music'],
                                capture_output=True, text=True, startupinfo=startupinfo, timeout=120)
-                add_log("INFO", serial, "Instalando Spotify con fix screen (sin restricción de captura)...")
+                add_log("INFO", serial, "Instalando Spotify con fix screen (sin restricciÃ³n de captura)...")
                 r = subprocess.run([adb_path, '-s', serial, 'install-multiple'] + install_files,
                                    capture_output=True, text=True, startupinfo=startupinfo, timeout=600)
                 if r.returncode != 0 or 'Success' not in r.stdout:
@@ -3348,13 +3426,13 @@ def send_discord_webhook(interval, url):
 
             if previous_streams_per_month is not None:
                 if streams_per_month > previous_streams_per_month:
-                    trend_emoji = "📈"  # Up
+                    trend_emoji = "ðŸ“ˆ"  # Up
                 elif streams_per_month < previous_streams_per_month:
-                    trend_emoji = "📉"  # Down
+                    trend_emoji = "ðŸ“‰"  # Down
                 else:
-                    trend_emoji = "⚖️"  # Steady
+                    trend_emoji = "âš–ï¸"  # Steady
             else:
-                trend_emoji = "🔄"  # Initial value
+                trend_emoji = "ðŸ”„"  # Initial value
 
             previous_streams_per_month = current_streams_per_month
             current_streams_per_month = streams_per_month
@@ -3394,19 +3472,19 @@ def send_discord_webhook(interval, url):
                             },
                             {
                             "id": 53898219,
-                                "name": "└ Spotify:",
+                                "name": "â”” Spotify:",
                                 "value": str(worker_streams_done_spotify),
                                 "inline": True
                             },
                             {
                             "id": 53898220,
-                                "name": "└ Tidal:",
+                                "name": "â”” Tidal:",
                                 "value": str(worker_streams_done_tidal),
                                 "inline": True
                             },
                             {
                             "id": 53898221,
-                                "name": "└ Apple Music:",
+                                "name": "â”” Apple Music:",
                                 "value": str(worker_streams_done_apple),
                                 "inline": True
                             },
@@ -3466,7 +3544,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.0.1"
+                            "text": "SonicPush STA 5.2.1"
                         }
                     }
                 ],
@@ -3836,10 +3914,10 @@ def check_and_click(d, album_name, artist_name, pkg, spotify_version=None):
             if album_name.lower() not in title.lower():
                 continue
             # Skip plain song/episode rows; only release rows (album/single/ep).
-            if 'canción' in subtitle or 'song' in subtitle or 'episodio' in subtitle or 'episode' in subtitle:
+            if 'canciÃ³n' in subtitle or 'song' in subtitle or 'episodio' in subtitle or 'episode' in subtitle:
                 continue
             if artist_name.lower() in subtitle:
-                if 'álbum' in subtitle or 'album' in subtitle:
+                if 'Ã¡lbum' in subtitle or 'album' in subtitle:
                     return row  # exact album row, click immediately
                 if best is None:
                     best = row  # single/ep with matching artist
@@ -3856,7 +3934,7 @@ def check_and_click(d, album_name, artist_name, pkg, spotify_version=None):
 
     # Second pass: filter to albums only and scan again.
     try:
-        alb_tab = d(text='Álbumes')
+        alb_tab = d(text='Ãlbumes')
         if alb_tab.exists():
             alb_tab.click()
             sleep(2)
@@ -4304,9 +4382,9 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
                     className="android.widget.ImageButton", index=1).info['contentDescription'])
                 if like_el.__contains__("Item added"):
                     pass
-                elif like_el.__contains__('Element wurde hinzugefügt'):
+                elif like_el.__contains__('Element wurde hinzugefÃ¼gt'):
                     pass
-                elif like_el.__contains__('Elemento añadido'):
+                elif like_el.__contains__('Elemento aÃ±adido'):
                     pass
                 elif like_el.__contains__('Elemento agregado'):
                     pass
@@ -4370,7 +4448,7 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
             try:
                 playtime2_seconds = time_to_seconds(playtime2)
             except:
-                playtime2_seconds = 240  # fallback: no se pudo leer la duración
+                playtime2_seconds = 240  # fallback: no se pudo leer la duraciÃ³n
             if playtime2_seconds <= 0:
                 playtime2_seconds = 240
             done = False
@@ -4516,23 +4594,23 @@ def disable_autoplay(d, udid, pkg):
         add_log("ERR.", udid, "disable_autoplay skipped, Pillow not available.")
         return
     try:
-        d(description='Inicio, Pestaña 1 de 4').click_exists(3)
+        d(description='Inicio, PestaÃ±a 1 de 4').click_exists(3)
         time.sleep(1.5)
-        if not d(description='Ir al perfil y a la configuración').exists:
+        if not d(description='Ir al perfil y a la configuraciÃ³n').exists:
             add_log("INFO", udid, "disable_autoplay: profile button not found.")
             return
-        d(description='Ir al perfil y a la configuración').click()
+        d(description='Ir al perfil y a la configuraciÃ³n').click()
         time.sleep(1.5)
-        if not d(text='Configuración y privacidad').exists:
+        if not d(text='ConfiguraciÃ³n y privacidad').exists:
             d.press('back')
             return
-        d(text='Configuración y privacidad').click()
+        d(text='ConfiguraciÃ³n y privacidad').click()
         time.sleep(1.5)
-        if not d(text='Reproducción').exists:
+        if not d(text='ReproducciÃ³n').exists:
             d.press('back')
             d.press('back')
             return
-        d(text='Reproducción').click()
+        d(text='ReproducciÃ³n').click()
         time.sleep(1.5)
         if not d(text='Autoplay').exists:
             d.press('back')
@@ -4581,7 +4659,7 @@ def disable_autoplay(d, udid, pkg):
             add_log("INFO", udid, "Autoplay already disabled.")
         d.press('back')
         time.sleep(1)
-        d(description='Inicio, Pestaña 1 de 4').click_exists(2)
+        d(description='Inicio, PestaÃ±a 1 de 4').click_exists(2)
         time.sleep(1)
     except Exception as e:
         add_log("ERR.", udid, f"disable_autoplay failed: {e}")
@@ -4748,21 +4826,21 @@ def _count_apple_songs_from_link(link):
     return 10
 
 _APPLE_BANNER_TERMS = (
-    'music + friends', 'music & friends', 'get started', 'obtén un mes gratis', 'obtener un mes gratis',
-    '¿ya estás suscrito?', 'ya estás suscrito', 'escucha y descarga toda la música',
-    'try it free', 'free trial', 'suscríbete a apple music', 'subscribe to apple music',
+    'music + friends', 'music & friends', 'get started', 'obtÃ©n un mes gratis', 'obtener un mes gratis',
+    'Â¿ya estÃ¡s suscrito?', 'ya estÃ¡s suscrito', 'escucha y descarga toda la mÃºsica',
+    'try it free', 'free trial', 'suscrÃ­bete a apple music', 'subscribe to apple music',
     'welcome to apple music', 'bienvenido a apple music', 'start listening',
     'empezar a escuchar', 'disfruta de apple music', 'ola de bienvenida'
 )
 
 _DIALOG_NEG_TEXTS = (
     'Ahora no', 'Not now', 'No, gracias', 'No gracias', 'Cancelar', 'Cancel',
-    'Más tarde', 'Later', 'Necesito más tiempo', 'Skip for now', 'Omitir',
+    'MÃ¡s tarde', 'Later', 'Necesito mÃ¡s tiempo', 'Skip for now', 'Omitir',
     'Cerrar', 'Close', 'Dismiss', 'Permitir una vez', 'Allow once'
 )
 _DIALOG_POS_TEXTS = (
     'OK', 'Aceptar', 'Accept', 'Entendido', 'Got it', 'Entiendo', 'Allow',
-    'Permitir', 'Sí', 'Yes'
+    'Permitir', 'SÃ­', 'Yes'
 )
 
 
@@ -5212,7 +5290,7 @@ def _strict_force_stop(udid, pkg, attempts=3):
     return False
 
 
-# ── Human-like helpers ───────────────────────────────────────────────
+# â”€â”€ Human-like helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _human_delay(min_s=0.3, max_s=1.2):
     """Random delay to mimic human pause."""
@@ -5596,7 +5674,7 @@ def _open_spotify_human(d, udid, link, artist_name, album_name, pkg='com.spotify
 
             song_items = d(resourceId='com.spotify.music:id/track_row')
             if not song_items.exists:
-                song_items = d(resourceId='com.spotify.music:id/simple播list_row')
+                song_items = d(resourceId='com.spotify.music:id/simpleæ’­list_row')
             if not song_items.exists:
                 song_items = d(resourceId='com.spotify.music:id/item_root')
 
@@ -6056,13 +6134,13 @@ def _sound_assistant_apk_path():
     return None
 
 
-_SA_PERM_TEXTS = ('Sí, continuar', 'Allow', 'Permitir', 'Yes', 'OK', 'Aceptar', 'Accept',
+_SA_PERM_TEXTS = ('SÃ­, continuar', 'Allow', 'Permitir', 'Yes', 'OK', 'Aceptar', 'Accept',
                   'Continuar', 'Continue', 'Permitir siempre', 'Allow always', 'Abrir', 'Open',
                   'SELECT APPS', 'Select Apps', 'select apps', 'SELECCIONAR', 'Seleccionar apps',
                   'Seleccionar', 'Elegir aplicaciones', 'CHOOSE APPS')
 
 _SA_MULTI_TERMS = ('multisonido', 'multisound', 'multi sound', 'multi-sound',
-                   'sonido múltiple', 'sonido multipl')
+                   'sonido mÃºltiple', 'sonido multipl')
 
 
 def _sa_scroll_for_terms(d, udid):
@@ -6527,7 +6605,7 @@ def _is_vpn_active(udid):
     #
     # OJO: NO se puede usar 'com.scheler.superproxy' + 'connected' como check
     # porque el paquete SIEMPRE aparece en NetworkRequest (el paquete esta
-    # instalado) y 'connected' aparece en "WIFI CONNECTED" — ambos son True
+    # instalado) y 'connected' aparece en "WIFI CONNECTED" â€” ambos son True
     # aunque NO haya VPN activo, causando un falso positivo constante.
     #
     # El UNICO check fiable es: "vpn connected" en el output + que el
@@ -6811,8 +6889,8 @@ def _find_proxy_card_pos(udid):
 
 
 def _is_super_proxy_list_view(udid):
-    """True si la pantalla de Super Proxy está en la vista de inicio/lista
-    (muestra la tarjeta del proxy y tabs, NO el botón grande Start/Stop verde/rojo)."""
+    """True si la pantalla de Super Proxy estÃ¡ en la vista de inicio/lista
+    (muestra la tarjeta del proxy y tabs, NO el botÃ³n grande Start/Stop verde/rojo)."""
     try:
         if _is_super_proxy_foreground(udid):
             color, pos = _screenshot_button_color(udid)
@@ -7289,6 +7367,8 @@ def _multi_app_next_song(udid, app_key, pkg, display_name):
     ui_lock.acquire()
     try:
         d = ua.connect(udid)
+        if app_key == 'tidal':
+            freeze_rotation_port(d)
         _human_launch_app(d, udid, pkg)
         _human_delay(1.5, 3.5)
 
@@ -7317,6 +7397,8 @@ def _multi_app_relaunch_after_link(udid, app_key, pkg, display_name):
     try:
         _ensure_volume_max(udid)
         d = ua.connect(udid)
+        if app_key == 'tidal':
+            freeze_rotation_port(d)
         _human_launch_app(d, udid, pkg)
         _human_delay(2.0, 4.0)
         d = ua.connect(udid)
@@ -7335,7 +7417,7 @@ def _multi_app_try_like_follow(d, udid, app_key, pkg, display_name):
 
     try:
         if random.random() < 0.15:
-            like_btn = d(description='Add to your library') or d(description='Añadir a tu biblioteca') or d(resourceId=f'{pkg}:id/like_button')
+            like_btn = d(description='Add to your library') or d(description='AÃ±adir a tu biblioteca') or d(resourceId=f'{pkg}:id/like_button')
             if like_btn.exists(timeout=2):
                 _human_delay(0.5, 1.5)
                 like_btn.click()
@@ -7822,6 +7904,74 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
             _stop_app_via_adb(udid, app_info['package'])
 
 
+def _relay_rand_seconds_for_app(app_key):
+    """Seconds for one relay turn of a platform, from config_relay_minutes_by_app
+    range like '30-45' (minutes). Falls back to 30-45 min if unset/invalid."""
+    raw = config_relay_minutes_by_app.get(app_key) or '30-45'
+    try:
+        parts = str(raw).replace(' ', '').split('-')
+        lo = int(parts[0])
+        hi = int(parts[1]) if len(parts) > 1 else lo
+    except Exception:
+        lo, hi = 30, 45
+    if lo < 1:
+        lo = 1
+    if hi < lo:
+        hi = lo
+    minutes = random.randint(lo, hi)
+    return minutes * 60
+
+
+def _relay_full_session(apps, udid, session_sec, binded_account, binded_proxy, conn_type, acc_type):
+    """Relay mode: platforms alternate, one at a time. Each platform plays for a
+    random amount within its configured minute range, then the next one takes over.
+    No Sound Assistant/Multi Audio Focus is required (apps never overlap)."""
+    if not apps:
+        return
+    order = list(apps)
+    random.shuffle(order)
+    session_start = time.time()
+    idx = 0
+    while (time.time() - session_start) < session_sec:
+        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+            break
+        app_key = order[idx % len(order)]
+        idx += 1
+        info = SUPPORTED_APPS.get(app_key)
+        if not info or app_key in worker_app_paused:
+            continue
+        pkg = info['package']
+        display_name = info['display_name']
+        turn_sec = _relay_rand_seconds_for_app(app_key)
+        add_log("INFO", udid, f"[Relay] [{display_name}] turn starts, will play ~{turn_sec // 60} min (relay session ~{int(session_sec // 60)} min)")
+        # Only THIS platform must sound: force-stop every other selected app.
+        for other in apps:
+            if other != app_key:
+                try:
+                    _stop_app_via_adb(udid, SUPPORTED_APPS[other]['package'])
+                except Exception:
+                    pass
+        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+            break
+        try:
+            _multi_app_start_all([app_key], udid, binded_account, binded_proxy, conn_type, acc_type)
+            if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                break
+            _multi_app_monitor_all([app_key], udid, turn_sec, binded_proxy, conn_type)
+            add_log("INFO", udid, f"[Relay] [{display_name}] turn finished, switching platform...")
+        except Exception as e:
+            add_log("ERR.", udid, f"[Relay] [{display_name}] turn error: {e}")
+        if not (stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid)):
+            time.sleep(random.uniform(4, 10))
+    add_log("INFO", udid, "[Relay] Relay session time ended, stopping all apps...")
+    for app_key in apps:
+        if app_key in worker_app_paused:
+            continue
+        app_info = SUPPORTED_APPS.get(app_key)
+        if app_info:
+            _stop_app_via_adb(udid, app_info['package'])
+
+
 def single_clone_automation_flow(d, udid, spotify_pkgs, session_time_seconds, session_time_hours, binded_account, binded_proxy, connection_type, account_type):
     is_spotify = any('spotify' in p for p in spotify_pkgs)
     display_name = 'Spotify' if is_spotify else (spotify_pkgs[0].split('.')[-1] if spotify_pkgs else 'App')
@@ -8129,16 +8279,23 @@ def main_function(config_data):
         # running 2+ apps just leaves others STOPPED. Force single app = Spotify.
         # IMPORTANT: run the DEX probe FIRST (once per device) so the first pass has
         # the real OK/BAD classification instead of an empty set.
-        if len(installed_selected) > 1 and udid not in _multi_sound_ok_devices and udid not in _multi_sound_bad_devices:
+        # In RELAY mode this does NOT apply (apps never play simultaneously), so we
+        # skip the Multi Sound probe entirely.
+        if config_play_mode == 'relay':
+            add_log("INFO", udid, f"[Relay] Play mode = relay: {len(installed_selected)} apps will alternate (one at a time). No Sound Assistant needed.")
+        elif len(installed_selected) > 1 and udid not in _multi_sound_ok_devices and udid not in _multi_sound_bad_devices:
             add_log("INFO", udid, f"[MultiApp] No MultiSound classification yet for {udid}; probing now...")
             _enable_multi_audio_focus(udid)
-        if len(installed_selected) > 1 and udid in _multi_sound_bad_devices:
+        elif len(installed_selected) > 1 and udid in _multi_sound_bad_devices:
             if 'spotify' in installed_selected:
                 add_log("WARN", udid, f"[MultiApp] No real MultiSound detected on this device; running Spotify only ({installed_selected} -> ['spotify'])")
                 installed_selected = ['spotify']
 
         if len(installed_selected) > 1:
-            add_log("INFO", udid, f"[MultiApp] {len(installed_selected)} apps installed: {installed_selected}. Using coordinated multi-app mode.")
+            if config_play_mode == 'relay':
+                add_log("INFO", udid, f"[Relay] {len(installed_selected)} apps selected: {installed_selected}. Using RELAY mode (one platform at a time).")
+            else:
+                add_log("INFO", udid, f"[MultiApp] {len(installed_selected)} apps installed: {installed_selected}. Using coordinated multi-app mode.")
             _st_raw = str(config_session_time).strip() or '8-8'
             _st_parts = _st_raw.split('-')
             session_time1 = int(_st_parts[0]) if _st_parts[0] else 8
@@ -8175,16 +8332,19 @@ def main_function(config_data):
                                 continue
                         if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
                             break
-                        _multi_app_start_all(apps, udid, binded_account, binded_proxy, conn_type, acc_type)
-                        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
-                            break
-                        _multi_app_monitor_all(apps, udid, session_sec, binded_proxy, conn_type)
-                        for app_key in apps:
-                            if app_key in worker_app_paused:
-                                continue
-                            pkg = SUPPORTED_APPS[app_key]['package']
-                            _stop_app_via_adb(udid, pkg)
-                        add_log("INFO", udid, "[MultiApp] Session ended, restarting cycle...")
+                        if config_play_mode == 'relay':
+                            _relay_full_session(apps, udid, session_sec, binded_account, binded_proxy, conn_type, acc_type)
+                        else:
+                            _multi_app_start_all(apps, udid, binded_account, binded_proxy, conn_type, acc_type)
+                            if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                                break
+                            _multi_app_monitor_all(apps, udid, session_sec, binded_proxy, conn_type)
+                            for app_key in apps:
+                                if app_key in worker_app_paused:
+                                    continue
+                                pkg = SUPPORTED_APPS[app_key]['package']
+                                _stop_app_via_adb(udid, pkg)
+                            add_log("INFO", udid, "[MultiApp] Session ended, restarting cycle...")
                     except Exception as e:
                         add_log("ERR.", udid, f"[MultiApp] Thread error: {e}")
                     time.sleep(5)
@@ -8619,12 +8779,12 @@ def _pause_app_on_devices(app_key):
                 if pkgs:
                     closed_pkgs.extend(pkgs)
                     closed_count += 1
-                _timer_log(f"{app_key.upper()} PAUSADO — cerrado en {udid}: {', '.join(pkgs) or 'N/A'}")
+                _timer_log(f"{app_key.upper()} PAUSADO â€” cerrado en {udid}: {', '.join(pkgs) or 'N/A'}")
             except Exception as e:
-                _timer_log(f"{app_key.upper()} PAUSADO — error en {udid}: {e}")
+                _timer_log(f"{app_key.upper()} PAUSADO â€” error en {udid}: {e}")
     except Exception as e:
-        _timer_log(f"{app_key.upper()} PAUSADO — error listando dispositivos: {e}")
-    _timer_log(f"{app_key.upper()} PAUSADO — cerrado en {closed_count} dispositivos ({', '.join(sorted(set(closed_pkgs))) or 'N/A'})")
+        _timer_log(f"{app_key.upper()} PAUSADO â€” error listando dispositivos: {e}")
+    _timer_log(f"{app_key.upper()} PAUSADO â€” cerrado en {closed_count} dispositivos ({', '.join(sorted(set(closed_pkgs))) or 'N/A'})")
 
 
 def _resume_app_on_devices(app_key):
@@ -8650,7 +8810,7 @@ def _resume_app_on_devices(app_key):
     except:
         pass
     worker_app_paused.discard(app_key)
-    _timer_log(f"{app_key.upper()} REANUDADO — abierto en todos los dispositivos")
+    _timer_log(f"{app_key.upper()} REANUDADO â€” abierto en todos los dispositivos")
 
 
 _TZ_OFFSETS = {
@@ -8761,7 +8921,7 @@ def cancel_timer():
 def _start_bot_by_timer():
     global worker_bot_running
     if worker_bot_running:
-        add_log("WARN", "timer", "Bot ya está corriendo, saltando inicio por temporizador")
+        add_log("WARN", "timer", "Bot ya estÃ¡ corriendo, saltando inicio por temporizador")
         return False
     try:
         configs_dir = os.path.join(project_dir, 'Files', 'Configs')
@@ -8855,6 +9015,7 @@ def _start_bot_by_timer():
 
         worker_bot_running = True
         _reset_stop_flags()
+        _start_rotation_keeper()
         _timer_log(f"Bot starting with config {config_name}, apps: {config_selected_apps}")
         bot_thread = threading.Thread(target=main_function, args=(config_data,))
         bot_thread.start()
@@ -8881,25 +9042,25 @@ def _timer_check_thread():
                         t["start_triggered"] = True
                         t["start_enabled"] = False
                         if ak == 'all':
-                            _timer_log(f"ALL INICIO a las {now.strftime('%H:%M:%S')} — iniciando bot completo")
+                            _timer_log(f"ALL INICIO a las {now.strftime('%H:%M:%S')} â€” iniciando bot completo")
                             if not worker_bot_running:
                                 if _start_bot_by_timer():
                                     _timer_log("Bot iniciado correctamente")
                                 else:
                                     _timer_log("ERROR: No se pudo iniciar el bot")
                             else:
-                                _timer_log("Bot ya está corriendo")
+                                _timer_log("Bot ya estÃ¡ corriendo")
                         else:
                             if ak in worker_app_paused:
                                 _resume_app_on_devices(ak)
                             else:
-                                _timer_log(f"{ak.upper()} ya está activo, no necesita reanudar")
+                                _timer_log(f"{ak.upper()} ya estÃ¡ activo, no necesita reanudar")
                 if t["stop_enabled"] and not t["stop_triggered"]:
                     if now.hour == t["stop_hour"] and now.minute == t["stop_minute"]:
                         t["stop_triggered"] = True
                         t["stop_enabled"] = False
                         if ak == 'all':
-                            _timer_log(f"ALL PARADA a las {now.strftime('%H:%M:%S')} — deteniendo bot completo")
+                            _timer_log(f"ALL PARADA a las {now.strftime('%H:%M:%S')} â€” deteniendo bot completo")
                             try:
                                 _stop_bot()
                                 _timer_log("Bot detenido correctamente")
