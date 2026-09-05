@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.2.1"
+Bot_version = "5.2.2"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -1758,7 +1758,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.2.1 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.2.2 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -3544,7 +3544,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.2.1"
+                            "text": "SonicPush STA 5.2.2"
                         }
                     }
                 ],
@@ -3969,6 +3969,36 @@ def _atx_reconnect(udid):
     except Exception as e:
         print(f"_atx_reconnect failed for {udid}: {e}")
         return None
+
+
+def _u2_connect_robust(udid, retries=3):
+    """Connect to a device with recovery against a dead/busy uiautomator2
+    driver. If the first session fails to come up ('server quit unexpectedly',
+    -32002, UiAutomation not connected), reset the driver via atx and retry."""
+    import uiautomator2 as ua2
+    for attempt in range(retries):
+        try:
+            d = ua2.connect(udid)
+            d.implicitly_wait(10)
+            d.app_current()
+            return d
+        except Exception as connect_err:
+            msg = str(connect_err)
+            if attempt >= retries - 1:
+                add_log("WARN", udid, f"[u2] connect failed after {retries} attempts: {msg}")
+                d2 = _atx_reconnect(udid)
+                if d2 is not None:
+                    return d2
+                return None
+            add_log("WARN", udid, f"[u2] connect attempt {attempt + 1} failed ({msg}); resetting driver...")
+            time.sleep(2 + attempt * 2)
+            try:
+                d2 = ua2.connect(udid)
+                d2.reset_uiautomator()
+            except Exception:
+                pass
+            time.sleep(2)
+    return None
 
 
 def _load_link_error(d, udid, e):
@@ -7366,7 +7396,10 @@ def _multi_app_next_song(udid, app_key, pkg, display_name):
     ui_lock = _get_device_ui_lock(udid)
     ui_lock.acquire()
     try:
-        d = ua.connect(udid)
+        d = _u2_connect_robust(udid)
+        if d is None:
+            add_log("WARN", udid, f"[MultiApp] [{display_name}] NEXT skipped (no u2 session)")
+            return
         if app_key == 'tidal':
             freeze_rotation_port(d)
         _human_launch_app(d, udid, pkg)
@@ -7396,12 +7429,17 @@ def _multi_app_relaunch_after_link(udid, app_key, pkg, display_name):
     ui_lock.acquire()
     try:
         _ensure_volume_max(udid)
-        d = ua.connect(udid)
+        d = _u2_connect_robust(udid)
+        if d is None:
+            add_log("WARN", udid, f"[MultiApp] [{display_name}] Relink skipped (no u2 session)")
+            return
         if app_key == 'tidal':
             freeze_rotation_port(d)
         _human_launch_app(d, udid, pkg)
         _human_delay(2.0, 4.0)
-        d = ua.connect(udid)
+        d2 = _u2_connect_robust(udid)
+        if d2 is not None:
+            d = d2
         _multi_app_relink_app(d, udid, app_key, pkg, display_name)
         _human_delay(1.0, 3.0)
         add_log("INFO", udid, f"[MultiApp] [{display_name}] Relink done")
