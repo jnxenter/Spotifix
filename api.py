@@ -90,7 +90,7 @@ db = SQLAlchemy(app)
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
 Bot_version = "5.2.4"
-GITHUB_REPO = "jnxenter/Spotifix"
+GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
 
