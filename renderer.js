@@ -761,6 +761,61 @@ document.addEventListener('DOMContentLoaded', () => {
                 fetchDevices(); // Reuse the function to fetch and display the devices after scraping
             });
 
+            // Reinicia el servidor ADB (a veces deja de reconocer teléfonos).
+            // Después vuelve a hacer el scrape para mostrar el número real.
+            document.getElementById('restartAdbButton').addEventListener('click', async function() {
+                const btn = this;
+                const original = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = 'Reiniciando ADB...';
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 180000);
+                try {
+                    let res;
+                    try {
+                        res = await fetch('http://localhost:8999/restart_adb', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${authToken}`
+                            },
+                            body: '{}',
+                            signal: controller.signal
+                        });
+                    } catch (netErr) {
+                        throw new Error(netErr.name === 'AbortError'
+                            ? 'El backend no respondió en 3 minutos.'
+                            : 'No se pudo contactar el backend en localhost:8999. ¿La app está abierta?');
+                    }
+                    if (res.status === 404) {
+                        throw new Error('Esta versión del backend no incluye /restart_adb. Cierra la app y reinstala la actualización.');
+                    }
+                    if (res.status === 401) {
+                        throw new Error('Sesión no autorizada (token vencido). Reinicia la app.');
+                    }
+                    const text = await res.text();
+                    let data = null;
+                    try { data = JSON.parse(text); } catch (e) { /* respuesta no JSON */ }
+                    if (!res.ok) {
+                        throw new Error((data && (data.error || data.message)) || `HTTP ${res.status}`);
+                    }
+                    if (!data) throw new Error('Respuesta inválida del backend.');
+                    if (!data.success) throw new Error(data.error || 'El backend no pudo reiniciar ADB.');
+
+                    let msg = `ADB reiniciado: ${data.after} dispositivo(s) detectado(s)`;
+                    if (data.before !== data.after) msg += ` (antes ${data.before})`;
+                    if (data.missing && data.missing.length) msg += `\nNo volvieron: ${data.missing.join(', ')}`;
+                    alert(msg);
+                    fetchDevices();
+                } catch (e) {
+                    alert('Error al reiniciar ADB: ' + (e.message || e));
+                } finally {
+                    clearTimeout(timeoutId);
+                    btn.disabled = false;
+                    btn.textContent = original;
+                }
+            });
+
             document.getElementById('patchSpotifyButton').addEventListener('click', function() {
                 const btn = this;
                 const original = btn.textContent;
@@ -1364,11 +1419,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
 
                 var _timerFirstLoad = true;
+                var _timerRepeatDaily = false;
+
+                function renderRepeatState(repeat) {
+                    _timerRepeatDaily = !!repeat;
+                    var stateEl = document.getElementById('timerRepeatState');
+                    var toggleBtn = document.getElementById('timerRepeatToggle');
+                    if (stateEl) {
+                        stateEl.textContent = _timerRepeatDaily ? 'ACTIVADA' : 'APAGADA';
+                        stateEl.style.color = _timerRepeatDaily ? '#2ecc71' : '#e74c3c';
+                    }
+                    if (toggleBtn) {
+                        toggleBtn.textContent = _timerRepeatDaily ? 'Apagar repetición diaria' : 'Activar repetición diaria';
+                        toggleBtn.style.background = _timerRepeatDaily ? '#e74c3c' : '#1a1a1a';
+                    }
+                }
+
                 function loadTimerState() {
                     fetch('http://localhost:8999/get_timer', { headers: { 'Authorization': 'Bearer ' + authToken } })
                     .then(r => r.json())
                     .then(d => {
                         if (d.timezone) tzSelect.value = d.timezone;
+                        renderRepeatState(d.repeat_daily);
                         var apps = d.timers || {};
                         ['all', 'spotify', 'tidal', 'apple'].forEach(ak => {
                             var info = apps[ak] || {};
@@ -1391,7 +1463,19 @@ document.addEventListener('DOMContentLoaded', () => {
                                 if (statusDiv) {
                                     if (info[enabledKey]) {
                                         var hDisp = to12(info[hourKey]);
-                                        statusDiv.innerHTML = '<span style="color:#2ecc71;">Activo — ' + actLabel + ' a las ' + hDisp.h + ':' + String(info[minKey] || 0).padStart(2, '0') + ' ' + hDisp.ampm + '</span>';
+                                        // el temporizador se repite solo si la
+                                        // repetición diaria está encendida.
+                                        var ranToday = false;
+                                        try {
+                                            var todayStr = new Date().toLocaleDateString('en-CA', { timeZone: tzSelect.value || undefined });
+                                            ranToday = info[action + '_last_date'] === todayStr;
+                                        } catch (e) {}
+                                        var modoTxt = _timerRepeatDaily
+                                            ? 'todos los días'
+                                            : 'una sola vez (se desactiva al ejecutarse)';
+                                        statusDiv.innerHTML = '<span style="color:#2ecc71;">Activo &#183; ' + modoTxt + ' &#8212; ' + actLabel +
+                                            ' a las ' + hDisp.h + ':' + String(info[minKey] || 0).padStart(2, '0') + ' ' + hDisp.ampm +
+                                            (ranToday ? ' <span style="color:#5dade2;">(ya se ejecutó hoy)</span>' : '') + '</span>';
                                     } else if (info[triggeredKey]) {
                                         statusDiv.innerHTML = '<span style="color:#e74c3c;">Ejecutado</span>';
                                     } else {
@@ -1441,6 +1525,36 @@ document.addEventListener('DOMContentLoaded', () => {
                         .catch(() => { statusDiv.innerHTML = '<span style="color:#e74c3c;">Error al cancelar</span>'; });
                     });
                 });
+
+                // Botón que prende/apaga la repetición diaria (por defecto encendida).
+                var repeatToggleBtn = document.getElementById('timerRepeatToggle');
+                if (repeatToggleBtn) {
+                    repeatToggleBtn.addEventListener('click', () => {
+                        var target = !_timerRepeatDaily;
+                        repeatToggleBtn.disabled = true;
+                        var prevText = repeatToggleBtn.textContent;
+                        repeatToggleBtn.textContent = 'Guardando...';
+                        fetch('http://localhost:8999/set_timer_repeat', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                            body: JSON.stringify({ enabled: target })
+                        })
+                        .then(async r => {
+                            var text = await r.text();
+                            var data = null;
+                            try { data = JSON.parse(text); } catch (e) {}
+                            if (r.status === 404) throw new Error('Esta versión del backend no incluye /set_timer_repeat. Reinstala la actualización.');
+                            if (!r.ok || !data || !data.success) throw new Error((data && data.error) || ('HTTP ' + r.status));
+                            renderRepeatState(data.repeat_daily);
+                            loadTimerState();
+                        })
+                        .catch(e => {
+                            alert('No se pudo cambiar la repetición diaria: ' + (e.message || e));
+                            repeatToggleBtn.textContent = prevText;
+                        })
+                        .finally(() => { repeatToggleBtn.disabled = false; });
+                    });
+                }
 
                 setInterval(() => {
                     try {
@@ -1567,6 +1681,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 if (tabName === 'chat') {
                     refreshChatStatus();
+                }
+                if (tabName === 'analytics') {
+                    startAnalyticsLoop();
+                } else {
+                    stopAnalyticsLoop();
                 }
             }
 
@@ -2304,6 +2423,111 @@ document.addEventListener('DOMContentLoaded', () => {
 
             document.getElementById('startDate').addEventListener('change', updateChart);
             document.getElementById('endDate').addEventListener('change', updateChart);
+
+            // ---- Analytics: KPIs y streams por dia (ultimos 7 dias) ----
+            var dailyStreamsTimer = null;
+
+            function formatKpiNumber(value) {
+                return (Number(value) || 0).toLocaleString('es-MX');
+            }
+
+            function setTextIfExists(id, text) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = text;
+            }
+
+            function sumBy(items, key) {
+                return (items || []).reduce(function (acc, item) {
+                    return acc + (Number(item[key]) || 0);
+                }, 0);
+            }
+
+            function renderDailyStreamsTable(days) {
+                const container = document.getElementById('dailyStreamsTable');
+                if (!container) return;
+                if (!days || !days.length) {
+                    container.innerHTML = '<p class="login-help">Sin datos todavia.</p>';
+                    return;
+                }
+                let html = '<table><thead><tr>' +
+                    '<th>Dia</th><th class="num">Spotify</th><th class="num">Tidal</th>' +
+                    '<th class="num">Apple Music</th><th class="num">Total</th></tr></thead><tbody>';
+                days.forEach(function (d) {
+                    html += '<tr class="' + (d.is_today ? 'today' : '') + '">' +
+                        '<td>' + d.label + (d.is_today ? ' <span style="color:#2ecc71;">(hoy)</span>' : '') + '</td>' +
+                        '<td class="num">' + formatKpiNumber(d.spotify) + '</td>' +
+                        '<td class="num">' + formatKpiNumber(d.tidal) + '</td>' +
+                        '<td class="num">' + formatKpiNumber(d.apple_music) + '</td>' +
+                        '<td class="num">' + formatKpiNumber(d.total) + '</td>' +
+                        '</tr>';
+                });
+                html += '</tbody><tfoot><tr>' +
+                    '<td>Total</td>' +
+                    '<td class="num">' + formatKpiNumber(sumBy(days, 'spotify')) + '</td>' +
+                    '<td class="num">' + formatKpiNumber(sumBy(days, 'tidal')) + '</td>' +
+                    '<td class="num">' + formatKpiNumber(sumBy(days, 'apple_music')) + '</td>' +
+                    '<td class="num">' + formatKpiNumber(sumBy(days, 'total')) + '</td>' +
+                    '</tr></tfoot></table>';
+                container.innerHTML = html;
+            }
+
+            function fetchDailyStreams() {
+                fetch('http://localhost:8999/get_daily_streams?days=7', {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (!data || data.error) {
+                            setTextIfExists('dailyStreamsInfo', 'No se pudieron cargar los datos: ' +
+                                ((data && data.error) || 'error'));
+                            return;
+                        }
+                        const days = data.days || [];
+                        const summary = data.summary || {};
+                        const today = data.today || {};
+                        const activeDays = summary.active_days || 0;
+                        const best = summary.best_day;
+
+                        setTextIfExists('kpiTodayValue', formatKpiNumber(today.total));
+                        setTextIfExists('kpiTodaySub', data.window
+                            ? (data.window.active ? 'Ventana activa 07:00-23:30' : 'Fuera de la ventana 07:00-23:30')
+                            : '');
+                        setTextIfExists('kpiWeekValue', formatKpiNumber(summary.week_total));
+                        setTextIfExists('kpiWeekSub', 'Zona: ' + (data.timezone || '--') + ' - 7 dias');
+                        setTextIfExists('kpiAvgValue', formatKpiNumber(summary.avg_per_active_day));
+                        setTextIfExists('kpiAvgSub', activeDays + ' dia' + (activeDays === 1 ? '' : 's') + ' con datos');
+                        setTextIfExists('kpiBestValue', best ? formatKpiNumber(best.total) : '--');
+                        setTextIfExists('kpiBestSub', best ? best.label : 'Sin datos todavia');
+                        setTextIfExists('kpiSpotifyValue', formatKpiNumber(sumBy(days, 'spotify')));
+                        setTextIfExists('kpiTidalValue', formatKpiNumber(sumBy(days, 'tidal')));
+                        setTextIfExists('kpiAppleValue', formatKpiNumber(sumBy(days, 'apple_music')));
+
+                        const info = document.getElementById('dailyStreamsInfo');
+                        if (info) {
+                            info.textContent = 'Ventana 07:00-23:30 (' + (data.timezone || '--') +
+                                '). Retencion: ' + (data.retention_days || 7) + ' dias. Se actualiza cada 30 segundos.';
+                        }
+                        renderDailyStreamsTable(days);
+                    })
+                    .catch(error => {
+                        console.error('Error fetching daily streams:', error);
+                    });
+            }
+
+            function startAnalyticsLoop() {
+                fetchDailyStreams();
+                if (dailyStreamsTimer) clearInterval(dailyStreamsTimer);
+                dailyStreamsTimer = setInterval(fetchDailyStreams, 30000);
+            }
+
+            function stopAnalyticsLoop() {
+                if (dailyStreamsTimer) {
+                    clearInterval(dailyStreamsTimer);
+                    dailyStreamsTimer = null;
+                }
+            }
 
         });
     }

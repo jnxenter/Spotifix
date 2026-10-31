@@ -89,7 +89,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.2.2"
+Bot_version = "5.2.4"
 GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -159,6 +159,26 @@ class StreamRecord(db.Model):
 
     def __repr__(self):
         return f'<StreamRecord {self.timestamp} - {self.streams_done}>'
+
+class DailyStreamStat(db.Model):
+    """Streams contados por dia y por app (Spotify/Tidal/Apple).
+
+    La fecha se calcula en la zona horaria configurada en el Temporizador y
+    solo se cuentan streams terminados dentro de la ventana 07:00 - 23:30.
+    Vive en batches.db (%APPDATA%\\Spotifix\\Spotify Mobile\\Files), asi que
+    sobrevive al cierre de la app. Se conservan los ultimos 7 dias.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.String(10), nullable=False)   # YYYY-MM-DD (zona del temporizador)
+    app = db.Column(db.String(20), nullable=False)    # spotify | tidal | apple_music
+    count = db.Column(db.Integer, nullable=False, default=0)
+    updated_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (db.UniqueConstraint('date', 'app', name='uq_daily_stream_date_app'),)
+
+    def __repr__(self):
+        return f'<DailyStreamStat {self.date} {self.app}={self.count}>'
+
 
 class Device(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -318,6 +338,31 @@ stream_data_queue = []
 stream_data_lock = threading.Lock()
 file_lock = threading.Lock()
 
+# Candado para los contadores globales del bot (worker_streams_done*,
+# worker_bot_errors, config_streams_to_do). Se modifican desde varios hilos
+# (uno por telefono) y `x += 1` NO es atomico (load+add+store): sin candado
+# el conteo de streams/errores se perdia o sumaba de mas con muchos telefonos.
+_counter_lock = threading.Lock()
+
+def _bump_counter(name, delta=1):
+    """Incrementa/decrementa un contador global de forma atomica."""
+    with _counter_lock:
+        globals()[name] = globals()[name] + delta
+
+def _take_stream_slot():
+    """Consume 1 slot de stream si quedaba alguno (atomico).
+
+    Devuelve False si ya no quedaban slots -> el llamador decide parar.
+    Sustituye al antiguo `if config_streams_to_do == 0: ... else: -= 1`,
+    que era check-then-act y podia perderse entre hilos.
+    """
+    global config_streams_to_do
+    with _counter_lock:
+        if config_streams_to_do <= 0:
+            return False
+        globals()['config_streams_to_do'] = config_streams_to_do - 1
+        return True
+
 device_ui_locks = {}
 
 def verify_token(token):
@@ -350,29 +395,47 @@ def require_token(f):
 
 
 def save_stream_data():
+    """Consume la cola de registros y los escribe en la BD.
+
+    Si un commit falla (BD bloqueada, disco, etc.) el hilo se reintenta en vez
+    de morirse en silencio: antes un solo error dejaba de guardar TODOS los
+    streams siguientes sin que nadie se diera cuenta.
+    """
     while True:
-        time.sleep(10)
-        records_to_save = []
-        with stream_data_lock:
-            if len(stream_data_queue) != 0:
-                records_to_save = stream_data_queue[:]
-                stream_data_queue.clear()
-        if records_to_save:
-            with app.app_context():
-                for record in records_to_save:
-                    new_record = StreamRecord(
-                        timestamp=record['timestamp'],
-                        streams_done=record['streams_done'],
-                        artist_name=record['artist_name'],
-                        song_name=record['song_name'],
-                        current_playtime=record['current_playtime']
-                    )
-                    db.session.add(new_record)
-                db.session.commit()
+        try:
+            time.sleep(10)
+            records_to_save = []
+            with stream_data_lock:
+                if len(stream_data_queue) != 0:
+                    records_to_save = stream_data_queue[:]
+                    stream_data_queue.clear()
+            if records_to_save:
+                with app.app_context():
+                    for record in records_to_save:
+                        new_record = StreamRecord(
+                            timestamp=record['timestamp'],
+                            streams_done=record['streams_done'],
+                            artist_name=record['artist_name'],
+                            song_name=record['song_name'],
+                            current_playtime=record['current_playtime']
+                        )
+                        db.session.add(new_record)
+                    db.session.commit()
+        except Exception as e:
+            try:
+                with app.app_context():
+                    db.session.rollback()
+            except Exception:
+                pass
+            try:
+                add_log("WARN", "SonicPush", f"save_stream_data: error guardando streams (se reintenta): {e}")
+            except Exception:
+                print(f"save_stream_data error: {e}")
+            time.sleep(5)
 
 
-# Start the consumer thread
-consumer_thread = threading.Thread(target=save_stream_data)
+# Start the consumer thread (daemon: no debe impedir que la app cierre)
+consumer_thread = threading.Thread(target=save_stream_data, daemon=True)
 consumer_thread.start()
 
 
@@ -767,7 +830,7 @@ def find_login_widgets(nodes):
         text = (n.get('text', '') + ' ' + n.get('contentDesc', '')).lower()
         cls = n.get('className', '')
         if 'EditText' in cls:
-            if 'pass' in rid or n.get('password') or (n.get('text') or '').lower() in ('contraseÃ±a', 'password', 'passwort'):
+            if 'pass' in rid or n.get('password') or (n.get('text') or '').lower() in ('contraseña', 'password', 'passwort'):
                 password = password or n
             elif 'email' in rid or 'user' in rid or 'username' in rid or email is None:
                 email = email or n
@@ -825,9 +888,9 @@ def _live_login_error(d, udid):
         nodes = dump_live_nodes(udid, d=d) if udid else []
         for n in nodes:
             t = (n.get('text', '') + ' ' + n.get('contentDesc', '')).lower()
-            if any(k in t for k in ('incorrect', 'contraseÃ±a no', 'contrasena no', 'no es correcta',
+            if any(k in t for k in ('incorrect', 'contraseña no', 'contrasena no', 'no es correcta',
                                     'invalid', 'falsch', 'isn\'t correct', 'doesn\'t match',
-                                    'combinaciÃ³n de correo')):
+                                    'combinación de correo')):
                 return True
         return False
     except Exception:
@@ -836,13 +899,13 @@ def _live_login_error(d, udid):
 
 def _spotify_code_screen_markers():
     """Text fragments that identify Spotify's email-verification-code screen."""
-    return ['introduce el cÃ³digo', 'introduce el codigo', 'te hemos enviado por correo',
+    return ['introduce el código', 'introduce el codigo', 'te hemos enviado por correo',
             'enter the code', 'code we sent', 'email a code', 'send you a code', 'verification code']
 
 
 def _spotify_password_fallback_texts():
     """Text fragments of the 'log in with password' link on the code screen."""
-    return ['iniciar sesiÃ³n con contraseÃ±a', 'iniciar sesiÃ³n con la contraseÃ±a',
+    return ['iniciar sesión con contraseña', 'iniciar sesión con la contraseña',
             'iniciar sesion con contrasena', 'log in with a password', 'log in with password',
             'log in with a password instead', 'use a password instead',
             'sign in with password', 'mit passwort anmelden', 'anmelden mit passwort']
@@ -983,7 +1046,7 @@ def infer_spotify_ui_mapping(nodes, version=None):
         text = (n.get('text', '') + ' ' + n.get('contentDesc', '')).lower()
         rid_of.setdefault(suffix, n)
         if 'EditText' in cls:
-            if 'pass' in suffix or (n.get('text') or '').lower() in ('contraseÃ±a', 'password', 'passwort'):
+            if 'pass' in suffix or (n.get('text') or '').lower() in ('contraseña', 'password', 'passwort'):
                 mapping.setdefault('password_text', suffix)
             elif 'user' in suffix or 'username' in suffix or 'email' in suffix:
                 mapping.setdefault('username_text', suffix)
@@ -1354,6 +1417,122 @@ def get_apple_accounts():
         with open(acc_file, 'r') as f:
             return jsonify({"accounts": f.read()})
     return jsonify({"accounts": ""})
+
+
+def _adb_serials(only_online: bool = True):
+    """Seriales de `adb devices` (solo conectados o todos, incluidos offline)."""
+    try:
+        result = subprocess.run(
+            [adb_path, 'devices'],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+            startupinfo=startupinfo
+        )
+        out = result.stdout or ''
+    except Exception:
+        return []
+    serials = []
+    for line in out.splitlines():
+        if '\t' not in line:
+            continue
+        serial, _, state = line.partition('\t')
+        serial = serial.strip()
+        state = state.strip()
+        if not serial or serial.lower().startswith('list of devices'):
+            continue
+        if only_online and state != 'device':
+            continue
+        serials.append(serial)
+    return serials
+
+
+@app.route('/restart_adb', methods=['POST'])
+@require_token
+def restart_adb():
+    """Reinicia el servidor ADB y vuelve a detectar TODOS los teléfonos.
+
+    ADB se atasca y deja de listar móviles (o los deja 'offline'). Esto hace
+    kill-server + start-server, reconecta los equipos por red (que se pierden
+    al matar el servidor) y espera a que la lista se estabilice antes de
+    contestar, para que "Scrape Devices" muestre el número real.
+    """
+    t0 = time.time()
+    before = _adb_serials(only_online=True)
+    try:
+        tcp_before = [s for s in _adb_serials(only_online=False) if ':' in s]
+    except Exception:
+        tcp_before = []
+
+    errors = []
+    for args in (['kill-server'], ['start-server']):
+        try:
+            r = subprocess.run(
+                [adb_path, *args],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=30, startupinfo=startupinfo
+            )
+            msg = ((r.stderr or '') + (r.stdout or '')).strip()
+            if msg and 'error' in msg.lower():
+                errors.append(msg)
+        except Exception as e:
+            errors.append(f"{args[0]}: {e}")
+
+    try:
+        subprocess.run([adb_path, 'reconnect', 'offline'], capture_output=True,
+                       text=True, timeout=20, startupinfo=startupinfo)
+    except Exception:
+        pass
+    # los dispositivos por red no sobreviven a kill-server: reconectar
+    for serial in tcp_before:
+        try:
+            subprocess.run([adb_path, 'connect', serial], capture_output=True,
+                           text=True, timeout=10, startupinfo=startupinfo)
+        except Exception:
+            pass
+
+    # esperar a que la lista se estabilice (no devolver un conteo a medias)
+    after = []
+    last_count = -1
+    stable = 0
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        after = _adb_serials(only_online=True)
+        if len(after) == last_count:
+            stable += 1
+            if stable >= 2:
+                break
+        else:
+            stable = 0
+            last_count = len(after)
+        time.sleep(1)
+
+    missing = [s for s in before if s not in after]
+    for serial in missing:
+        try:
+            if ':' in serial:
+                subprocess.run([adb_path, 'connect', serial], capture_output=True,
+                               text=True, timeout=10, startupinfo=startupinfo)
+            else:
+                subprocess.run([adb_path, 'reconnect', serial], capture_output=True,
+                               text=True, timeout=10, startupinfo=startupinfo)
+        except Exception:
+            pass
+    if missing:
+        time.sleep(1.5)
+        after = _adb_serials(only_online=True)
+        missing = [s for s in before if s not in after]
+
+    add_log("INFO", "Main", f"ADB reiniciado: {len(before)} -> {len(after)} dispositivos")
+    return jsonify({
+        "success": True,
+        "before": len(before),
+        "after": len(after),
+        "missing": missing,
+        "elapsed_ms": round((time.time() - t0) * 1000),
+        "error": "; ".join(errors),
+    })
 
 
 @app.route('/scrape_devices', methods=['GET'])
@@ -1758,7 +1937,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.2.2 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.2.4 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -1959,6 +2138,151 @@ def get_configs():
     config_path = os.path.join(project_dir, 'Files', 'Configs')
     configs = [f.split('.')[0] for f in os.listdir(config_path) if f.endswith('.json')]
     return jsonify({"configs": configs})
+
+
+# ---------------------------------------------------------------------------
+# Analytics: streams por dia (persistente, ultimos 7 dias)
+# ---------------------------------------------------------------------------
+DAILY_STREAM_RETENTION_DAYS = 7
+DAILY_STREAM_WINDOW_START_MIN = 7 * 60        # 07:00
+DAILY_STREAM_WINDOW_END_MIN = 23 * 60 + 30    # 23:30 (incluido)
+_WEEKDAY_NAMES_ES = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
+_daily_stats_lock = threading.Lock()
+
+
+def _daily_stream_date(now=None):
+    """Devuelve 'YYYY-MM-DD' del dia operativo o None si estamos fuera de 07:00-23:30.
+
+    La hora se toma en la zona horaria configurada en el Temporizador para que
+    el "dia" coincida con el reloj que usa el usuario (p. ej. America/Mexico_City).
+    """
+    if now is None:
+        tz_name = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+        now = _get_now_in_tz(tz_name)
+    minutes = now.hour * 60 + now.minute
+    if minutes < DAILY_STREAM_WINDOW_START_MIN or minutes > DAILY_STREAM_WINDOW_END_MIN:
+        return None
+    return now.strftime("%Y-%m-%d")
+
+
+def _prune_daily_streams():
+    """Elimina los dias que ya quedaron fuera de la retencion (7 dias)."""
+    try:
+        tz_name = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+        cutoff = (_get_now_in_tz(tz_name) - timedelta(days=DAILY_STREAM_RETENTION_DAYS - 1)).strftime("%Y-%m-%d")
+        deleted = DailyStreamStat.query.filter(DailyStreamStat.date < cutoff).delete(synchronize_session=False)
+        if deleted:
+            db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
+
+def _record_daily_stream(app_key, count=1):
+    """Suma streams al dia operativo actual para una app y lo guarda en la BD.
+
+    Se llama justo donde el bot cuenta un stream real (Spotify single,
+    single-app y multi-app). El guardado es inmediato para que un cierre de la
+    app no pierda el dia; si SQLite esta ocupado se reintenta.
+    """
+    try:
+        count = int(count or 0)
+        if count <= 0:
+            return
+        date_str = _daily_stream_date()
+        if not date_str:
+            return
+        app_key = app_key or 'spotify'
+        with _daily_stats_lock:
+            with app.app_context():
+                for attempt in range(3):
+                    try:
+                        row = DailyStreamStat.query.filter_by(date=date_str, app=app_key).first()
+                        if row is None:
+                            row = DailyStreamStat(date=date_str, app=app_key, count=0)
+                            db.session.add(row)
+                        row.count = int(row.count or 0) + count
+                        row.updated_at = datetime.utcnow()
+                        db.session.commit()
+                        break
+                    except Exception:
+                        db.session.rollback()
+                        if attempt == 2:
+                            raise
+                        time.sleep(0.5)
+                _prune_daily_streams()
+    except Exception as e:
+        try:
+            add_log("WARN", "SonicPush", f"daily stats: no se pudo guardar el stream ({app_key}): {e}")
+        except Exception:
+            pass
+
+
+@app.route('/get_daily_streams', methods=['GET'])
+@require_token
+def get_daily_streams():
+    """Streams por dia (maximo 7) con desglose por app y resumen para los KPIs."""
+    try:
+        days = int(request.args.get('days', DAILY_STREAM_RETENTION_DAYS))
+    except (TypeError, ValueError):
+        days = DAILY_STREAM_RETENTION_DAYS
+    days = max(1, min(days, DAILY_STREAM_RETENTION_DAYS))
+
+    tz_name = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+    now = _get_now_in_tz(tz_name)
+    start_day = now.date() - timedelta(days=days - 1)
+    start_str = start_day.strftime("%Y-%m-%d")
+    today_str = now.strftime("%Y-%m-%d")
+
+    rows = DailyStreamStat.query.filter(DailyStreamStat.date >= start_str).all()
+    by_day = {}
+    for row in rows:
+        by_day.setdefault(row.date, {})[row.app] = int(row.count or 0)
+
+    result_days = []
+    for i in range(days):
+        d = start_day + timedelta(days=i)
+        ds = d.strftime("%Y-%m-%d")
+        apps = by_day.get(ds, {})
+        spotify = apps.get('spotify', 0)
+        tidal = apps.get('tidal', 0)
+        apple = apps.get('apple_music', 0)
+        result_days.append({
+            "date": ds,
+            "weekday": _WEEKDAY_NAMES_ES[d.weekday()],
+            "label": f"{_WEEKDAY_NAMES_ES[d.weekday()]} {d.strftime('%d/%m')}",
+            "is_today": ds == today_str,
+            "spotify": spotify,
+            "tidal": tidal,
+            "apple_music": apple,
+            "total": spotify + tidal + apple,
+        })
+
+    week_total = sum(d["total"] for d in result_days)
+    active_days = [d for d in result_days if d["total"] > 0]
+    best_day = max(result_days, key=lambda d: d["total"]) if active_days else None
+    minutes_now = now.hour * 60 + now.minute
+
+    return jsonify({
+        "days": result_days,
+        "today": result_days[-1] if result_days else None,
+        "timezone": tz_name,
+        "window": {
+            "start": "07:00",
+            "end": "23:30",
+            "active": DAILY_STREAM_WINDOW_START_MIN <= minutes_now <= DAILY_STREAM_WINDOW_END_MIN,
+        },
+        "retention_days": DAILY_STREAM_RETENTION_DAYS,
+        "summary": {
+            "week_total": week_total,
+            "avg_per_day": round(week_total / days, 1) if days else 0,
+            "avg_per_active_day": round(week_total / len(active_days), 1) if active_days else 0,
+            "active_days": len(active_days),
+            "best_day": best_day,
+        },
+    })
 
 
 @app.route('/get_streams_done', methods=['GET'])
@@ -2450,12 +2774,12 @@ def spotify_login(d, account, udid=None):
 
         time.sleep(5)
         ensure_ui_registered()
-        if udid and _live_click_text(d, udid, ('log in', 'iniciar sesiÃ³n', 'iniciar sesion', 'anmelden')):
+        if udid and _live_click_text(d, udid, ('log in', 'iniciar sesión', 'iniciar sesion', 'anmelden')):
             pass
         elif d(text="Log in").exists:
             d(text="Log in").click()
-        elif d(text="Iniciar sesiÃ³n").exists:
-            d(text="Iniciar sesiÃ³n").click()
+        elif d(text="Iniciar sesión").exists:
+            d(text="Iniciar sesión").click()
         elif d(text="Anmelden").exists:
             d(text="Anmelden").click()
         else:
@@ -2519,7 +2843,7 @@ def spotify_login(d, account, udid=None):
             # click the 'log in with a password' link directly if visible
             if _click_spotify_password_fallback(d, udid=udid):
                 _fell_back = True
-                print("password link: clicked 'Iniciar sesiÃ³n con contraseÃ±a' fallback")
+                print("password link: clicked 'Iniciar sesión con contraseña' fallback")
                 sleep(2)
                 break
             if not _on_spotify_code_screen(d, udid=udid) and not _live_has_password_fallback(d, udid):
@@ -2550,10 +2874,10 @@ def spotify_login(d, account, udid=None):
                 except Exception as e:
                     print(f"input text password error: {e}")
         sleep(0.3)
-        if udid and _live_click_text(d, udid, ('iniciar sesiÃ³n', 'iniciar sesion', 'log in', 'anmelden')):
+        if udid and _live_click_text(d, udid, ('iniciar sesión', 'iniciar sesion', 'log in', 'anmelden')):
             pass
-        elif d(text="Iniciar sesiÃ³n").exists:
-            d(text="Iniciar sesiÃ³n").click()
+        elif d(text="Iniciar sesión").exists:
+            d(text="Iniciar sesión").click()
         elif d(text="Log in").exists:
             d(text="Log in").click()
         elif d(text="Anmelden").exists:
@@ -2683,10 +3007,10 @@ def spotify_login(d, account, udid=None):
                                 else:
                                     d.shell(f"input text '{password}'")
                             sleep(0.3)
-                            if udid and _live_click_text(d, udid, ('iniciar sesiÃ³n', 'iniciar sesion', 'log in', 'anmelden')):
+                            if udid and _live_click_text(d, udid, ('iniciar sesión', 'iniciar sesion', 'log in', 'anmelden')):
                                 pass
-                            elif d(text="Iniciar sesiÃ³n").exists:
-                                d(text="Iniciar sesiÃ³n").click()
+                            elif d(text="Iniciar sesión").exists:
+                                d(text="Iniciar sesión").click()
                             elif d(text="Log in").exists:
                                 d(text="Log in").click()
                             elif d(text="Anmelden").exists:
@@ -2705,7 +3029,7 @@ def spotify_login(d, account, udid=None):
                 pass
 
             try:
-                if d(textContains="combinaciÃ³n de correo y contraseÃ±a es incorrecta").exists(timeout=1):
+                if d(textContains="combinación de correo y contraseña es incorrecta").exists(timeout=1):
                     print(f"wrong credentials")
                     invalid_creds = True
                     type = True
@@ -3202,10 +3526,10 @@ def run_spotify_patch():
         patcher_file = os.path.join(base_dir, 'SpotifyPatcher.py')
         add_log("INFO", "SonicPush", f"Fix screen iniciado. Tools: {tools_dir}")
         if not os.path.isfile(patcher_file):
-            add_log("ERR.", "SonicPush", "No se encontrÃ³ el mÃ³dulo del fix screen.")
+            add_log("ERR.", "SonicPush", "No se encontró el módulo del fix screen.")
             return
         if not os.path.isdir(tools_dir):
-            add_log("ERR.", "SonicPush", f"No se encontrÃ³ la carpeta Tools en {tools_dir}")
+            add_log("ERR.", "SonicPush", f"No se encontró la carpeta Tools en {tools_dir}")
             return
         import importlib.util
         spec = importlib.util.spec_from_file_location('SpotifyPatcher', patcher_file)
@@ -3235,7 +3559,7 @@ def run_spotify_patch():
                                    capture_output=True, text=True, startupinfo=startupinfo, timeout=60)
                 paths = [l.strip() for l in r.stdout.splitlines() if l.strip().startswith('package:')]
                 if not paths:
-                    add_log("WARN", serial, "Spotify no estÃ¡ instalado en este dispositivo, se omite como origen.")
+                    add_log("WARN", serial, "Spotify no está instalado en este dispositivo, se omite como origen.")
                     continue
                 os.makedirs(splits_dir, exist_ok=True)
                 device_apks = [p[len('package:'):].strip() for p in paths]
@@ -3256,7 +3580,7 @@ def run_spotify_patch():
                 add_log("WARN", serial, f"No se pudo obtener el APK: {e}")
 
         if not base_apk or not os.path.isfile(base_apk):
-            add_log("ERR.", "SonicPush", "No se pudo obtener un APK de Spotify instalado. Instala Spotify en algÃºn dispositivo y reintenta.")
+            add_log("ERR.", "SonicPush", "No se pudo obtener un APK de Spotify instalado. Instala Spotify en algún dispositivo y reintenta.")
             return
 
         import hashlib
@@ -3264,18 +3588,18 @@ def run_spotify_patch():
             base_sha = hashlib.sha256(fh.read()).hexdigest()[:16]
 
         if split_apks:
-            # InstalaciÃ³n por splits (bundle de Play Store). El FLAG_SECURE vive
+            # Instalación por splits (bundle de Play Store). El FLAG_SECURE vive
             # en el dex del base; los splits llevan libs y recursos (p. ej.
             # split_config.xxhdpi contiene el drawable 'launcher_screen'). Se
             # modifica solo el base y se firman base + splits con el mismo
             # keystore para reinstalarlos juntos con install-multiple. Unir solo
-            # las libs en un APK Ãºnico eliminaba los recursos de los splits de
-            # configuraciÃ³n y Spotify crasheaba (Resources$NotFoundException).
+            # las libs en un APK único eliminaba los recursos de los splits de
+            # configuración y Spotify crasheaba (Resources$NotFoundException).
             patched_base = os.path.join(patch_root, f'spotify_patched_{base_sha}.apk')
             if os.path.isfile(patched_base):
-                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versiÃ³n, se reutiliza.")
+                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versión, se reutiliza.")
             else:
-                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricciÃ³n de captura). Tarda unos minutos...")
+                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricción de captura). Tarda unos minutos...")
                 try:
                     ok, msg = patcher.patch_apk(base_apk, patched_base, tools_dir, os.path.join(patch_root, 'work'))
                     if not ok:
@@ -3298,7 +3622,7 @@ def run_spotify_patch():
                 patched_splits.append(out)
             install_files = [patched_base] + patched_splits
         else:
-            # APK Ãºnico (universal): unir splits es no-op; se modifica y se instala.
+            # APK único (universal): unir splits es no-op; se modifica y se instala.
             try:
                 abi = ''
                 if source_serial:
@@ -3312,16 +3636,16 @@ def run_spotify_patch():
                     add_log("ERR.", "SonicPush", f"Fallo al fusionar splits: {msg}")
                     return
                 if split_apks:
-                    add_log("INFO", "SonicPush", f"FusiÃ³n de splits: {msg}")
+                    add_log("INFO", "SonicPush", f"Fusión de splits: {msg}")
                 base_apk = merged_apk
             except Exception as e:
                 add_log("ERR.", "SonicPush", f"Error al fusionar splits: {e}")
                 return
             patched_apk = os.path.join(patch_root, f'spotify_patched_{base_sha}.apk')
             if os.path.isfile(patched_apk):
-                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versiÃ³n, se reutiliza.")
+                add_log("INFO", "SonicPush", "Fix screen ya aplicado para esta versión, se reutiliza.")
             else:
-                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricciÃ³n de captura). Tarda unos minutos...")
+                add_log("INFO", "SonicPush", "Aplicando fix screen a Spotify (quitar restricción de captura). Tarda unos minutos...")
                 try:
                     ok, msg = patcher.patch_apk(base_apk, patched_apk, tools_dir, os.path.join(patch_root, 'work'))
                     if not ok:
@@ -3342,7 +3666,7 @@ def run_spotify_patch():
                 add_log("INFO", serial, "Desinstalando Spotify original...")
                 subprocess.run([adb_path, '-s', serial, 'uninstall', 'com.spotify.music'],
                                capture_output=True, text=True, startupinfo=startupinfo, timeout=120)
-                add_log("INFO", serial, "Instalando Spotify con fix screen (sin restricciÃ³n de captura)...")
+                add_log("INFO", serial, "Instalando Spotify con fix screen (sin restricción de captura)...")
                 r = subprocess.run([adb_path, '-s', serial, 'install-multiple'] + install_files,
                                    capture_output=True, text=True, startupinfo=startupinfo, timeout=600)
                 if r.returncode != 0 or 'Success' not in r.stdout:
@@ -3430,7 +3754,7 @@ def send_discord_webhook(interval, url):
                 elif streams_per_month < previous_streams_per_month:
                     trend_emoji = "ðŸ“‰"  # Down
                 else:
-                    trend_emoji = "âš–ï¸"  # Steady
+                    trend_emoji = "⚖️"  # Steady
             else:
                 trend_emoji = "ðŸ”„"  # Initial value
 
@@ -3472,19 +3796,19 @@ def send_discord_webhook(interval, url):
                             },
                             {
                             "id": 53898219,
-                                "name": "â”” Spotify:",
+                                "name": "└ Spotify:",
                                 "value": str(worker_streams_done_spotify),
                                 "inline": True
                             },
                             {
                             "id": 53898220,
-                                "name": "â”” Tidal:",
+                                "name": "└ Tidal:",
                                 "value": str(worker_streams_done_tidal),
                                 "inline": True
                             },
                             {
                             "id": 53898221,
-                                "name": "â”” Apple Music:",
+                                "name": "└ Apple Music:",
                                 "value": str(worker_streams_done_apple),
                                 "inline": True
                             },
@@ -3544,7 +3868,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.2.2"
+                            "text": "SonicPush STA 5.2.4"
                         }
                     }
                 ],
@@ -3914,10 +4238,10 @@ def check_and_click(d, album_name, artist_name, pkg, spotify_version=None):
             if album_name.lower() not in title.lower():
                 continue
             # Skip plain song/episode rows; only release rows (album/single/ep).
-            if 'canciÃ³n' in subtitle or 'song' in subtitle or 'episodio' in subtitle or 'episode' in subtitle:
+            if 'canción' in subtitle or 'song' in subtitle or 'episodio' in subtitle or 'episode' in subtitle:
                 continue
             if artist_name.lower() in subtitle:
-                if 'Ã¡lbum' in subtitle or 'album' in subtitle:
+                if 'álbum' in subtitle or 'album' in subtitle:
                     return row  # exact album row, click immediately
                 if best is None:
                     best = row  # single/ep with matching artist
@@ -3934,7 +4258,7 @@ def check_and_click(d, album_name, artist_name, pkg, spotify_version=None):
 
     # Second pass: filter to albums only and scan again.
     try:
-        alb_tab = d(text='Ãlbumes')
+        alb_tab = d(text='Álbumes')
         if alb_tab.exists():
             alb_tab.click()
             sleep(2)
@@ -4009,7 +4333,7 @@ def _load_link_error(d, udid, e):
     update_thread_status(udid, 'Error while Loading link', None, False, False, False, False, True, None)
     add_log("ERR.", udid, "Error while Loading link: " + str(e))
     global worker_bot_errors
-    worker_bot_errors += 1
+    _bump_counter('worker_bot_errors', 1)
     return False, 0, d
 
 
@@ -4042,6 +4366,7 @@ def _load_link_impl(d, udid, account_type, pkg, spotify_version=None):
         search_play = False
 
         d.implicitly_wait(5)
+        logged_out = False
         try:
             # Only treat as logged out when the actual login form is present, so a
             # transient splash/loading logo does not hard-block the worker.
@@ -4049,9 +4374,14 @@ def _load_link_impl(d, udid, account_type, pkg, spotify_version=None):
                     d(resourceId=spotify_ui(pkg, spotify_version, 'username_text')).exists(3):
                 add_log("EXC.", udid, f"Device is logged out: {udid}!")
                 update_thread_status(udid, 'Logged out', None, False, False, False, False, False, None)
-                input()
+                logged_out = True
         except:
             pass
+        if logged_out:
+            # ANTES había un input() aquí. En la app empaquetada (sin consola)
+            # input() bloquea el hilo PARA SIEMPRE: el teléfono se quedaba muerto
+            # sin que Stop lo sacara. Ahora se aborta la carga y el hilo continúa.
+            return False, 0, d
 
 
         link_type, artist_name, album_name, song_count = artist_links_function(link, None, None, None, None)
@@ -4222,7 +4552,7 @@ def _load_link_impl(d, udid, account_type, pkg, spotify_version=None):
                     return False, 0, d
 
 
-        '''if random.randrange(100) < int(config_make_playlist_and_stream):
+        r'''if random.randrange(100) < int(config_make_playlist_and_stream):
             d.implicitly_wait(20)
             if account_type != "Premium":
                 d(resourceId="com.spotify.music:id/context_menu_button").click()
@@ -4344,7 +4674,7 @@ def _load_link_impl(d, udid, account_type, pkg, spotify_version=None):
         update_thread_status(udid, 'Error while Loading link', None, False, False, False, False, True, None)
         add_log("ERR.", udid, "Error while Loading link: " + str(e))
         global worker_bot_errors
-        worker_bot_errors += 1
+        _bump_counter('worker_bot_errors', 1)
         return False, 0, d
 
 
@@ -4412,9 +4742,9 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
                     className="android.widget.ImageButton", index=1).info['contentDescription'])
                 if like_el.__contains__("Item added"):
                     pass
-                elif like_el.__contains__('Element wurde hinzugefÃ¼gt'):
+                elif like_el.__contains__('Element wurde hinzugefügt'):
                     pass
-                elif like_el.__contains__('Elemento aÃ±adido'):
+                elif like_el.__contains__('Elemento añadido'):
                     pass
                 elif like_el.__contains__('Elemento agregado'):
                     pass
@@ -4478,7 +4808,7 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
             try:
                 playtime2_seconds = time_to_seconds(playtime2)
             except:
-                playtime2_seconds = 240  # fallback: no se pudo leer la duraciÃ³n
+                playtime2_seconds = 240  # fallback: no se pudo leer la duración
             if playtime2_seconds <= 0:
                 playtime2_seconds = 240
             done = False
@@ -4543,16 +4873,14 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
             add_log("WARN", udid, f"[Spotify] Not really PLAYING ({_np_state}) after 3 retries; NOT counting stream (relaxed strict).")
             return True, ppa, d
         global worker_streams_done, worker_streams_done_spotify
-        worker_streams_done += 1
-        worker_streams_done_spotify += 1
-        global config_streams_to_do
-        if config_streams_to_do == 0:
+        _bump_counter('worker_streams_done')
+        _bump_counter('worker_streams_done_spotify')
+        _record_daily_stream('spotify')
+        if not _take_stream_slot():
             add_log("FINAL", udid, "All Streams were made!")
             send_stream_data_to_consumer(datetime.now(), worker_streams_done, artistInfo, titleInfo, 0)
             _request_bot_stop()
             return False, 0, d
-        else:
-            config_streams_to_do -= 1
         ppa -= 1
 
         update_thread_status(udid, 'Stream done', None, False, True, False, False, False, None)
@@ -4595,12 +4923,13 @@ def play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version=None):
         update_thread_status(udid, 'Error while Playing song', None, False, False, False, False, True, None)
         add_log("ERR.", udid, "Error while Playing song: " + str(e))
         global worker_bot_errors
-        worker_bot_errors += 1
+        _bump_counter('worker_bot_errors', 1)
         if '-32002' in str(e):
             _newd = _atx_reconnect(udid)
             if _newd is not None:
                 d = _newd
-        return False, 0, d
+        # -1 = error TRANSITORIO (reintentable). 0 = parada legitima.
+        return False, -1, d
 
 def restart_spotify_if_crashed(d, restart, pkg):
     try:
@@ -4624,23 +4953,23 @@ def disable_autoplay(d, udid, pkg):
         add_log("ERR.", udid, "disable_autoplay skipped, Pillow not available.")
         return
     try:
-        d(description='Inicio, PestaÃ±a 1 de 4').click_exists(3)
+        d(description='Inicio, Pestaña 1 de 4').click_exists(3)
         time.sleep(1.5)
-        if not d(description='Ir al perfil y a la configuraciÃ³n').exists:
+        if not d(description='Ir al perfil y a la configuración').exists:
             add_log("INFO", udid, "disable_autoplay: profile button not found.")
             return
-        d(description='Ir al perfil y a la configuraciÃ³n').click()
+        d(description='Ir al perfil y a la configuración').click()
         time.sleep(1.5)
-        if not d(text='ConfiguraciÃ³n y privacidad').exists:
+        if not d(text='Configuración y privacidad').exists:
             d.press('back')
             return
-        d(text='ConfiguraciÃ³n y privacidad').click()
+        d(text='Configuración y privacidad').click()
         time.sleep(1.5)
-        if not d(text='ReproducciÃ³n').exists:
+        if not d(text='Reproducción').exists:
             d.press('back')
             d.press('back')
             return
-        d(text='ReproducciÃ³n').click()
+        d(text='Reproducción').click()
         time.sleep(1.5)
         if not d(text='Autoplay').exists:
             d.press('back')
@@ -4689,7 +5018,7 @@ def disable_autoplay(d, udid, pkg):
             add_log("INFO", udid, "Autoplay already disabled.")
         d.press('back')
         time.sleep(1)
-        d(description='Inicio, PestaÃ±a 1 de 4').click_exists(2)
+        d(description='Inicio, Pestaña 1 de 4').click_exists(2)
         time.sleep(1)
     except Exception as e:
         add_log("ERR.", udid, f"disable_autoplay failed: {e}")
@@ -4856,21 +5185,21 @@ def _count_apple_songs_from_link(link):
     return 10
 
 _APPLE_BANNER_TERMS = (
-    'music + friends', 'music & friends', 'get started', 'obtÃ©n un mes gratis', 'obtener un mes gratis',
-    'Â¿ya estÃ¡s suscrito?', 'ya estÃ¡s suscrito', 'escucha y descarga toda la mÃºsica',
-    'try it free', 'free trial', 'suscrÃ­bete a apple music', 'subscribe to apple music',
+    'music + friends', 'music & friends', 'get started', 'obtén un mes gratis', 'obtener un mes gratis',
+    '¿ya estás suscrito?', 'ya estás suscrito', 'escucha y descarga toda la música',
+    'try it free', 'free trial', 'suscríbete a apple music', 'subscribe to apple music',
     'welcome to apple music', 'bienvenido a apple music', 'start listening',
     'empezar a escuchar', 'disfruta de apple music', 'ola de bienvenida'
 )
 
 _DIALOG_NEG_TEXTS = (
     'Ahora no', 'Not now', 'No, gracias', 'No gracias', 'Cancelar', 'Cancel',
-    'MÃ¡s tarde', 'Later', 'Necesito mÃ¡s tiempo', 'Skip for now', 'Omitir',
+    'Más tarde', 'Later', 'Necesito más tiempo', 'Skip for now', 'Omitir',
     'Cerrar', 'Close', 'Dismiss', 'Permitir una vez', 'Allow once'
 )
 _DIALOG_POS_TEXTS = (
     'OK', 'Aceptar', 'Accept', 'Entendido', 'Got it', 'Entiendo', 'Allow',
-    'Permitir', 'SÃ­', 'Yes'
+    'Permitir', 'Sí', 'Yes'
 )
 
 
@@ -5094,7 +5423,7 @@ def _app_generic_load_link(d, udid, pkg, display_name):
     except Exception as e:
         add_log("ERR.", udid, f"[{display_name}] Error loading link: {str(e)}")
         global worker_bot_errors
-        worker_bot_errors += 1
+        _bump_counter('worker_bot_errors', 1)
         return False, 0, d
 
 
@@ -5181,20 +5510,19 @@ def _app_generic_play_song(d, udid, pkg, display_name, ppa, songs_num):
             add_log("WARN", udid, f"[{display_name}] Not PLAYING ({_np_state}) after 3 retries; skipping stream without counting (relaxed strict).")
             return True, ppa, d
 
-        worker_streams_done += 1
+        _bump_counter('worker_streams_done', 1)
         if 'spotify' in display_name.lower():
-            worker_streams_done_spotify += 1
+            _bump_counter('worker_streams_done_spotify', 1)
         elif 'tidal' in display_name.lower():
-            worker_streams_done_tidal += 1
+            _bump_counter('worker_streams_done_tidal', 1)
         elif 'apple' in display_name.lower():
-            worker_streams_done_apple += 1
-        if config_streams_to_do == 0:
+            _bump_counter('worker_streams_done_apple')
+        _record_daily_stream(app_key)
+        if not _take_stream_slot():
             add_log("FINAL", udid, f"[{display_name}] All Streams were made!")
             send_stream_data_to_consumer(datetime.now(), worker_streams_done, _np_artist, _np_title, 0)
             _request_bot_stop()
             return False, 0, d
-        else:
-            config_streams_to_do -= 1
         ppa -= 1
 
         send_stream_data_to_consumer(datetime.now(), worker_streams_done, _np_artist, _np_title, 0)
@@ -5217,8 +5545,9 @@ def _app_generic_play_song(d, udid, pkg, display_name, ppa, songs_num):
     except Exception as e:
         add_log("ERR.", udid, f"[{display_name}] Error playing song: {str(e)}")
         global worker_bot_errors
-        worker_bot_errors += 1
-        return False, 0, d
+        _bump_counter('worker_bot_errors', 1)
+        # -1 = error TRANSITORIO (reintentable). 0 = parada legitima.
+        return False, -1, d
 
 
 def _app_generic_restart_if_crashed(d, restart, pkg):
@@ -5278,10 +5607,66 @@ def _adb_is_audio_playing(udid, pkg=None):
         return True
     return False
 
+class _SafeUILock:
+    """RLock con timeout por defecto y release a prueba de errores.
+
+    Motivo: los hilos del bot hacían ui_lock.acquire() SIN timeout. Si un hilo
+    moría o se atascaba con el lock, TODOS los demás hilos de ese teléfono se
+    quedaban colgados para siempre y Stop no los sacaba de ahí.
+
+    Ahora:
+      * acquire() espera como mucho 90 s y devuelve False si no lo consigue
+        (pasando timeout explícito se respeta, p. ej. acquire(timeout=6)).
+      * release() solo libera si este hilo realmente adquirió; si no, no hace
+        nada (evita RuntimeError por soltar un lock que no se tiene).
+      * Se avisa en el log cuando el lock no se obtiene, para detectar hilos
+        atascados.
+    """
+
+    _TIMEOUT_DEFAULT = 90
+
+    def __init__(self, udid):
+        self._udid = udid
+        self._lock = threading.RLock()
+        self._depth = threading.local()  # adquisiciones de ESTE hilo
+
+    def acquire(self, blocking=True, timeout=-1, *, priority=None):
+        if timeout is None or timeout < 0:
+            timeout = self._TIMEOUT_DEFAULT
+        ok = self._lock.acquire(blocking, timeout)
+        if ok:
+            self._depth.n = getattr(self._depth, 'n', 0) + 1
+        else:
+            try:
+                add_log("WARN", self._udid,
+                        f"UI lock ocupado mas de {timeout}s (hilo atascado); se omite la accion")
+            except Exception:
+                pass
+        return ok
+
+    def release(self):
+        n = getattr(self._depth, 'n', 0)
+        if n <= 0:
+            return  # este hilo no tenía el lock: no liberar
+        self._depth.n = n - 1
+        try:
+            self._lock.release()
+        except RuntimeError:
+            pass
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+        return False
+
+
 def _get_device_ui_lock(udid):
     """Get or create a threading Lock for a specific device's UI."""
     if udid not in device_ui_locks:
-        device_ui_locks[udid] = threading.RLock()
+        device_ui_locks[udid] = _SafeUILock(udid)
     return device_ui_locks[udid]
 
 def _adb_go_home(udid):
@@ -5320,7 +5705,7 @@ def _strict_force_stop(udid, pkg, attempts=3):
     return False
 
 
-# â”€â”€ Human-like helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ── Human-like helpers ───────────────────────────────────────────────
 
 def _human_delay(min_s=0.3, max_s=1.2):
     """Random delay to mimic human pause."""
@@ -6164,13 +6549,13 @@ def _sound_assistant_apk_path():
     return None
 
 
-_SA_PERM_TEXTS = ('SÃ­, continuar', 'Allow', 'Permitir', 'Yes', 'OK', 'Aceptar', 'Accept',
+_SA_PERM_TEXTS = ('Sí, continuar', 'Allow', 'Permitir', 'Yes', 'OK', 'Aceptar', 'Accept',
                   'Continuar', 'Continue', 'Permitir siempre', 'Allow always', 'Abrir', 'Open',
                   'SELECT APPS', 'Select Apps', 'select apps', 'SELECCIONAR', 'Seleccionar apps',
                   'Seleccionar', 'Elegir aplicaciones', 'CHOOSE APPS')
 
 _SA_MULTI_TERMS = ('multisonido', 'multisound', 'multi sound', 'multi-sound',
-                   'sonido mÃºltiple', 'sonido multipl')
+                   'sonido múltiple', 'sonido multipl')
 
 
 def _sa_scroll_for_terms(d, udid):
@@ -6635,7 +7020,7 @@ def _is_vpn_active(udid):
     #
     # OJO: NO se puede usar 'com.scheler.superproxy' + 'connected' como check
     # porque el paquete SIEMPRE aparece en NetworkRequest (el paquete esta
-    # instalado) y 'connected' aparece en "WIFI CONNECTED" â€” ambos son True
+    # instalado) y 'connected' aparece en "WIFI CONNECTED" — ambos son True
     # aunque NO haya VPN activo, causando un falso positivo constante.
     #
     # El UNICO check fiable es: "vpn connected" en el output + que el
@@ -6919,8 +7304,8 @@ def _find_proxy_card_pos(udid):
 
 
 def _is_super_proxy_list_view(udid):
-    """True si la pantalla de Super Proxy estÃ¡ en la vista de inicio/lista
-    (muestra la tarjeta del proxy y tabs, NO el botÃ³n grande Start/Stop verde/rojo)."""
+    """True si la pantalla de Super Proxy está en la vista de inicio/lista
+    (muestra la tarjeta del proxy y tabs, NO el botón grande Start/Stop verde/rojo)."""
     try:
         if _is_super_proxy_foreground(udid):
             color, pos = _screenshot_button_color(udid)
@@ -7455,7 +7840,7 @@ def _multi_app_try_like_follow(d, udid, app_key, pkg, display_name):
 
     try:
         if random.random() < 0.15:
-            like_btn = d(description='Add to your library') or d(description='AÃ±adir a tu biblioteca') or d(resourceId=f'{pkg}:id/like_button')
+            like_btn = d(description='Add to your library') or d(description='Añadir a tu biblioteca') or d(resourceId=f'{pkg}:id/like_button')
             if like_btn.exists(timeout=2):
                 _human_delay(0.5, 1.5)
                 like_btn.click()
@@ -7556,6 +7941,10 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
             elapsed = now - app_timers.get(app_key, session_start)
 
             if elapsed >= actual_playtime and now >= app_next_action_time.get(app_key, 0):
+                # Releer SIEMPRE el estado de links: antes se usaba la copia
+                # capturada al iniciar el monitor (linea 7697), que quedaba
+                # congelada y provocaba decisiones con datos viejos.
+                link_info = getattr(_multi_app_relink_app, '_link_info', {})
                 if app_key not in link_info:
                     app_timers[app_key] = now
                     app_next_action_time[app_key] = now + random.uniform(15, 35)
@@ -7609,15 +7998,15 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
                     app_timers[app_key] = now
                     app_next_action_time[app_key] = now + random.uniform(15, 35)
                     continue
-                worker_streams_done += 1
+                _bump_counter('worker_streams_done', 1)
                 if app_key == 'spotify':
-                    worker_streams_done_spotify += 1
+                    _bump_counter('worker_streams_done_spotify', 1)
                 elif app_key == 'tidal':
-                    worker_streams_done_tidal += 1
+                    _bump_counter('worker_streams_done_tidal', 1)
                 elif app_key == 'apple_music':
-                    worker_streams_done_apple += 1
-                if config_streams_to_do > 0:
-                    config_streams_to_do -= 1
+                    _bump_counter('worker_streams_done_apple', 1)
+                _record_daily_stream(app_key, 1)
+                _take_stream_slot()  # atomico; solo consume si quedaban slots
                 app_stream_counts[app_key] = app_stream_counts.get(app_key, 0) + 1
                 app_timers[app_key] = now
                 app_relink_counters[app_key] = app_relink_counters.get(app_key, 15) - 1
@@ -8021,7 +8410,10 @@ def single_clone_automation_flow(d, udid, spotify_pkgs, session_time_seconds, se
             add_log("INFO", udid, f"Spotify version detected: {spotify_version or 'unknown'} (pkg: {pkg})")
         if str(config_streaming_mode_only).lower().__contains__('false'):
             if str(binded_account).lower().rstrip() == '/':
-                input('No binded account provided; press Enter to continue.')
+                # ANTES: input() bloqueaba el hilo para siempre (app sin consola).
+                # Se omite el paquete y se continúa con el siguiente.
+                add_log("ERR.", udid, f"[{display_name}] Sin cuenta vinculada; se omite {pkg}.")
+                continue
         ensure_screen_on(d)
         d.set_input_ime(True)
         freeze_rotation_port(d)
@@ -8100,28 +8492,58 @@ def single_clone_automation_flow(d, udid, spotify_pkgs, session_time_seconds, se
                     if restart_spotify_if_crashed(d, True, pkg) is True:
                         add_log("EXC.", udid, f"{pkg} crashed, restarted it.")
                     link_loaded, songs_num, d = load_link(d, udid, account_type, pkg, spotify_version)
+                    song_failures = 0
                     while songs_num != 0:
+                        if stop_flags.get(udid) or stop_flags.get('all') or stop_flags.get(f"{udid}_multiapp"):
+                            break
                         played_song, ppa, d = play_song(d, udid, account_type, ppa, songs_num, pkg, spotify_version)
                         if played_song is True:
+                            song_failures = 0
                             songs_num -= 1
-                        else:
-                            if ppa == 0:
-                                ppa = 9999999
+                        elif ppa == -1:
+                            # Error TRANSITORIO (excepcion): ANTES se abandonaba
+                            # el link entero por cualquier fallo. Ahora se
+                            # reintenta la MISMA cancion hasta 3 veces.
+                            ppa = 9999999  # resetear para el reintento
+                            song_failures += 1
+                            if song_failures >= 3:
+                                add_log("WARN", udid, f"[{display_name}] Cancion fallo {song_failures} veces; se abandona el link.")
                                 songs_num = 0
                                 break
+                            add_log("WARN", udid, f"[{display_name}] Fallo al reproducir (intento {song_failures}/3); reintentando...")
+                            time.sleep(random.uniform(4, 8))
+                        else:
+                            # Parada legitima (PPA agotado / streams totales).
+                            ppa = 9999999
+                            songs_num = 0
+                            break
                 else:
                     if _app_generic_restart_if_crashed(d, True, pkg):
                         add_log("EXC.", udid, f"[{display_name}] {pkg} crashed, restarted it.")
                     link_loaded, songs_num, d = _app_generic_load_link(d, udid, pkg, display_name)
+                    song_failures = 0
                     while songs_num != 0:
+                        if stop_flags.get(udid) or stop_flags.get('all') or stop_flags.get(f"{udid}_multiapp"):
+                            break
                         played_song, ppa, d = _app_generic_play_song(d, udid, pkg, display_name, ppa, songs_num)
                         if played_song is True:
+                            song_failures = 0
                             songs_num -= 1
-                        else:
-                            if ppa == 0:
-                                ppa = 9999999
+                        elif ppa == -1:
+                            # Error TRANSITORIO: reintentar la misma cancion (3 intentos).
+                            ppa = 9999999
+                            song_failures += 1
+                            if song_failures >= 3:
+                                add_log("WARN", udid, f"[{display_name}] Cancion fallo {song_failures} veces; se abandona el link.")
                                 songs_num = 0
                                 break
+                            add_log("WARN", udid, f"[{display_name}] Fallo al reproducir (intento {song_failures}/3); reintentando...")
+                            time.sleep(random.uniform(4, 8))
+                        else:
+                            # Parada legitima (PPA agotado / streams totales).
+                            ppa = 9999999
+                            songs_num = 0
+                            break
                 add_log("SUCC", udid, f"[{display_name}] Songs in link done")
                 break
         add_log("INFO", udid, f"[{display_name}] Session for package {pkg} ended.")
@@ -8701,8 +9123,21 @@ for _ak in ['all', 'spotify', 'tidal', 'apple']:
     _per_app_timers[_ak] = {
         "stop_enabled": False, "stop_hour": 22, "stop_minute": 0, "stop_triggered": False,
         "start_enabled": False, "start_hour": 8, "start_minute": 0, "start_triggered": False,
+        # fecha (YYYY-MM-DD) del último disparo: es lo que evita repetirlo
+        # dentro del mismo día y permite que vuelva a saltar mañana.
+        "start_last_date": "", "stop_last_date": "",
     }
 _per_app_timers["all"]["timezone"] = "America/Mexico_City"
+
+# Cuántos minutos de margen hay para disparar una tarea programada. Si la PC
+# estaba suspendida/ocupada justo al minuto exacto, al volver se ejecuta igual.
+_TIMER_GRACE_MIN = 60
+
+# Repetición diaria OPCIONAL (encendida por defecto). Con True el temporizador
+# se mantiene activo y vuelve a dispararse cada día a la misma hora. Con False
+# se ejecuta una vez y se desactiva. La UI la prende/apaga con el botón
+# "Repetición diaria".
+_timer_repeat_daily = True
 
 
 def _timer_cfg_path():
@@ -8722,8 +9157,13 @@ def _save_timer_config():
                 "start_enabled": t.get("start_enabled", False),
                 "start_hour": t.get("start_hour", 8),
                 "start_minute": t.get("start_minute", 0),
+                # se guarda la fecha del último disparo para no repetirlo si la
+                # app se reinicia el mismo día (mañana la fecha cambia y salta).
+                "start_last_date": t.get("start_last_date", ""),
+                "stop_last_date": t.get("stop_last_date", ""),
             }
         ser["timezone"] = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+        ser["repeat_daily"] = bool(_timer_repeat_daily)
         p = _timer_cfg_path()
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, 'w', encoding='utf-8') as f:
@@ -8743,13 +9183,16 @@ def _load_timer_config():
         for _ak in _per_app_timers:
             s = ser.get(_ak, {})
             t = _per_app_timers[_ak]
-            for k in ("stop_enabled", "stop_hour", "stop_minute", "start_enabled", "start_hour", "start_minute"):
+            for k in ("stop_enabled", "stop_hour", "stop_minute", "start_enabled", "start_hour", "start_minute",
+                      "start_last_date", "stop_last_date"):
                 if k in s:
                     t[k] = s[k]
             t["stop_triggered"] = False
             t["start_triggered"] = False
         if "timezone" in ser:
             _per_app_timers["all"]["timezone"] = ser["timezone"]
+        global _timer_repeat_daily
+        _timer_repeat_daily = bool(ser.get("repeat_daily", True))
     except Exception:
         pass
 
@@ -8766,8 +9209,18 @@ def _timer_log(msg):
     add_log("INFO", "timer", msg)
 
 
+# La UI del temporizador usa la clave 'apple' pero SUPPORTED_APPS y el bot usan
+# 'apple_music': sin este alias el temporizador de Apple Music no hacía nada.
+_APP_KEY_ALIASES = {'apple': 'apple_music'}
+
+
+def _app_cfg_key(app_key):
+    return _APP_KEY_ALIASES.get(app_key, app_key)
+
+
 def _installed_pkgs_for_app(udid, app_key):
     """Return every installed package matching an app (base + clones/patched)."""
+    app_key = _app_cfg_key(app_key)
     patterns = {
         'spotify': 'com.spotify',
         'tidal': 'com.aspiro',
@@ -8801,9 +9254,14 @@ def _force_close_app_pkgs(udid, app_key):
 
 
 def _pause_app_on_devices(app_key):
-    if app_key not in SUPPORTED_APPS:
+    cfg_key = _app_cfg_key(app_key)
+    if cfg_key not in SUPPORTED_APPS:
+        _timer_log(f"{app_key.upper()} no es una app soportada; nada que pausar")
         return
-    worker_app_paused.add(app_key)
+    # el bot consulta 'worker_app_paused' con las claves de SUPPORTED_APPS
+    worker_app_paused.add(cfg_key)
+    if cfg_key != app_key:
+        worker_app_paused.add(app_key)
     closed_count = 0
     closed_pkgs = []
     try:
@@ -8813,23 +9271,25 @@ def _pause_app_on_devices(app_key):
                 continue
             udid = line.split()[0]
             try:
-                pkgs = _force_close_app_pkgs(udid, app_key)
+                pkgs = _force_close_app_pkgs(udid, cfg_key)
                 if pkgs:
                     closed_pkgs.extend(pkgs)
                     closed_count += 1
-                _timer_log(f"{app_key.upper()} PAUSADO â€” cerrado en {udid}: {', '.join(pkgs) or 'N/A'}")
+                _timer_log(f"{app_key.upper()} PAUSADO — cerrado en {udid}: {', '.join(pkgs) or 'N/A'}")
             except Exception as e:
-                _timer_log(f"{app_key.upper()} PAUSADO â€” error en {udid}: {e}")
+                _timer_log(f"{app_key.upper()} PAUSADO — error en {udid}: {e}")
     except Exception as e:
-        _timer_log(f"{app_key.upper()} PAUSADO â€” error listando dispositivos: {e}")
-    _timer_log(f"{app_key.upper()} PAUSADO â€” cerrado en {closed_count} dispositivos ({', '.join(sorted(set(closed_pkgs))) or 'N/A'})")
+        _timer_log(f"{app_key.upper()} PAUSADO — error listando dispositivos: {e}")
+    _timer_log(f"{app_key.upper()} PAUSADO — cerrado en {closed_count} dispositivos ({', '.join(sorted(set(closed_pkgs))) or 'N/A'})")
 
 
 def _resume_app_on_devices(app_key):
-    if app_key not in SUPPORTED_APPS:
+    cfg_key = _app_cfg_key(app_key)
+    if cfg_key not in SUPPORTED_APPS:
+        _timer_log(f"{app_key.upper()} no es una app soportada; nada que reanudar")
         return
-    pkg = SUPPORTED_APPS[app_key]['package']
-    launch = SUPPORTED_APPS[app_key].get('launch_activity', '')
+    pkg = SUPPORTED_APPS[cfg_key]['package']
+    launch = SUPPORTED_APPS[cfg_key].get('launch_activity', '')
     try:
         result = subprocess.run([adb_path, 'devices', '-l'], stdout=subprocess.PIPE, text=True, startupinfo=startupinfo)
         for line in result.stdout.strip().split('\n')[1:]:
@@ -8847,8 +9307,9 @@ def _resume_app_on_devices(app_key):
                 pass
     except:
         pass
+    worker_app_paused.discard(cfg_key)
     worker_app_paused.discard(app_key)
-    _timer_log(f"{app_key.upper()} REANUDADO â€” abierto en todos los dispositivos")
+    _timer_log(f"{app_key.upper()} REANUDADO — abierto en todos los dispositivos")
 
 
 _TZ_OFFSETS = {
@@ -8876,15 +9337,56 @@ def _get_now_in_tz(tz_name):
         return datetime.now(timezone(timedelta(hours=offset_h)))
 
 
+def _timer_due(now, t, action):
+    """¿Toca ejecutar 'start'/'stop' hoy? (una sola vez al día).
+
+    - La tarea debe seguir habilitada (ya no se apaga al dispararse).
+    - Si ya se disparó hoy (start_last_date == hoy) no se repite.
+    - Hay margen de _TIMER_GRACE_MIN minutos: si la app/PC estaba ocupada o
+      suspendida justo a la hora exacta, se ejecuta igual al volver.
+    """
+    if not t.get(action + "_enabled"):
+        return False
+    today = now.strftime("%Y-%m-%d")
+    if t.get(action + "_last_date") == today:
+        return False
+    try:
+        h = int(t.get(action + "_hour", 0))
+        m = int(t.get(action + "_minute", 0))
+    except (TypeError, ValueError):
+        return False
+    try:
+        sched = now.replace(hour=h, minute=m, second=0, microsecond=0)
+    except ValueError:
+        return False
+    late_min = (now - sched).total_seconds() / 60.0
+    return 0 <= late_min <= _TIMER_GRACE_MIN
+
+
+def _timer_mark_passed_today(t, action):
+    """Al guardar una hora: si hoy ya pasó, no disparar hoy (solo mañana)."""
+    try:
+        tz = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+        now = _get_now_in_tz(tz)
+        h = int(t.get(action + "_hour", 0))
+        m = int(t.get(action + "_minute", 0))
+        sched = now.replace(hour=h, minute=m, second=0, microsecond=0)
+        t[action + "_last_date"] = now.strftime("%Y-%m-%d") if now > sched else ""
+    except Exception:
+        t[action + "_last_date"] = ""
+
+
 @app.route('/get_timer', methods=['GET'])
 @require_token
 def get_timer():
-    result = {"timers": {}, "timezone": _per_app_timers["all"].get("timezone", "America/Mexico_City"), "paused_apps": list(worker_app_paused), "log": _timer_log_entries[-30:]}
+    result = {"timers": {}, "timezone": _per_app_timers["all"].get("timezone", "America/Mexico_City"), "paused_apps": list(worker_app_paused), "log": _timer_log_entries[-30:], "repeat_daily": bool(_timer_repeat_daily)}
     for ak in ['all', 'spotify', 'tidal', 'apple']:
         t = _per_app_timers[ak]
         result["timers"][ak] = {
             "stop_enabled": t["stop_enabled"], "stop_hour": t["stop_hour"], "stop_minute": t["stop_minute"], "stop_triggered": t["stop_triggered"],
             "start_enabled": t["start_enabled"], "start_hour": t["start_hour"], "start_minute": t["start_minute"], "start_triggered": t["start_triggered"],
+            "start_last_date": t.get("start_last_date", ""), "stop_last_date": t.get("stop_last_date", ""),
+            "repeat_daily": bool(_timer_repeat_daily),
         }
     return jsonify(result)
 
@@ -8911,6 +9413,8 @@ def set_timer():
         except (IndexError, ValueError):
             return jsonify({"success": False, "error": "Invalid time"}), 400
         t[action + "_triggered"] = False
+        # si la hora elegida ya pasó hoy, no se dispara hoy: mañana a esa hora
+        _timer_mark_passed_today(t, action)
     else:
         if "stop_time" in data:
             t["stop_enabled"] = data.get("stop_enabled", True)
@@ -8921,6 +9425,7 @@ def set_timer():
             except (IndexError, ValueError):
                 return jsonify({"success": False, "error": "Invalid stop time"}), 400
             t["stop_triggered"] = False
+            _timer_mark_passed_today(t, "stop")
         if "start_time" in data:
             t["start_enabled"] = data.get("start_enabled", True)
             parts = data["start_time"].split(":")
@@ -8930,13 +9435,32 @@ def set_timer():
             except (IndexError, ValueError):
                 return jsonify({"success": False, "error": "Invalid start time"}), 400
             t["start_triggered"] = False
+            _timer_mark_passed_today(t, "start")
     tz = _per_app_timers["all"].get("timezone", "America/Mexico_City")
+    modo = "se repetirá todos los días" if _timer_repeat_daily else "una sola vez (repetición diaria apagada)"
     if t["stop_enabled"]:
-        _timer_log(f"[{app_key.upper()}] Parada activada: {t['stop_hour']:02d}:{t['stop_minute']:02d} ({tz})")
+        _timer_log(f"[{app_key.upper()}] Parada activada: {t['stop_hour']:02d}:{t['stop_minute']:02d} ({tz}) — {modo}")
     if t["start_enabled"]:
-        _timer_log(f"[{app_key.upper()}] Inicio activado: {t['start_hour']:02d}:{t['start_minute']:02d} ({tz})")
+        _timer_log(f"[{app_key.upper()}] Inicio activado: {t['start_hour']:02d}:{t['start_minute']:02d} ({tz}) — {modo}")
     _save_timer_config()
     return jsonify({"success": True})
+
+
+@app.route('/set_timer_repeat', methods=['POST'])
+@require_token
+def set_timer_repeat():
+    """Prende/apaga la repetición diaria de los temporizadores.
+
+    Apagada (por defecto): cada temporizador se ejecuta una vez y se desactiva.
+    Encendida: la configuración se mantiene y salta cada día a la misma hora.
+    """
+    global _timer_repeat_daily
+    data = request.json or {}
+    new_value = bool(data.get("enabled", not _timer_repeat_daily))
+    _timer_repeat_daily = new_value
+    _save_timer_config()
+    _timer_log("Repetición diaria " + ("ACTIVADA" if new_value else "APAGADA"))
+    return jsonify({"success": True, "repeat_daily": _timer_repeat_daily})
 
 
 @app.route('/cancel_timer', methods=['POST'])
@@ -8951,6 +9475,8 @@ def cancel_timer():
     t["start_enabled"] = False
     t["stop_triggered"] = False
     t["start_triggered"] = False
+    t["stop_last_date"] = ""
+    t["start_last_date"] = ""
     _timer_log(f"[{app_key.upper()}] Temporizadores desactivados")
     _save_timer_config()
     return jsonify({"success": True})
@@ -8959,7 +9485,7 @@ def cancel_timer():
 def _start_bot_by_timer():
     global worker_bot_running
     if worker_bot_running:
-        add_log("WARN", "timer", "Bot ya estÃ¡ corriendo, saltando inicio por temporizador")
+        add_log("WARN", "timer", "Bot ya está corriendo, saltando inicio por temporizador")
         return False
     try:
         configs_dir = os.path.join(project_dir, 'Files', 'Configs')
@@ -9068,44 +9594,61 @@ def _start_bot_by_timer():
 
 
 def _timer_check_thread():
-    _timer_log("Timer thread per-app started")
+    _timer_log("Timer thread per-app started (repetición diaria " + ("ACTIVA" if _timer_repeat_daily else "APAGADA") + ")")
     while True:
         try:
             tz = _per_app_timers["all"].get("timezone", "America/Mexico_City")
             now = _get_now_in_tz(tz)
+            today = now.strftime("%Y-%m-%d")
             for ak in ['all', 'spotify', 'tidal', 'apple']:
                 t = _per_app_timers[ak]
-                if t["start_enabled"] and not t["start_triggered"]:
-                    if now.hour == t["start_hour"] and now.minute == t["start_minute"]:
-                        t["start_triggered"] = True
+                # ---- INICIO (una vez al día, se queda activo para mañana) ----
+                if _timer_due(now, t, "start"):
+                    t["start_last_date"] = today
+                    t["start_triggered"] = True
+                    if not _timer_repeat_daily:
                         t["start_enabled"] = False
-                        if ak == 'all':
-                            _timer_log(f"ALL INICIO a las {now.strftime('%H:%M:%S')} â€” iniciando bot completo")
-                            if not worker_bot_running:
-                                if _start_bot_by_timer():
-                                    _timer_log("Bot iniciado correctamente")
-                                else:
-                                    _timer_log("ERROR: No se pudo iniciar el bot")
+                    _save_timer_config()
+                    if not _timer_repeat_daily:
+                        fut = "temporizador desactivado (una sola vez)"
+                    else:
+                        fut = f"próximo: mañana {t['start_hour']:02d}:{t['start_minute']:02d}"
+                    if ak == 'all':
+                        _timer_log(f"ALL INICIO a las {now.strftime('%H:%M:%S')} — iniciando bot completo ({fut})")
+                        if not worker_bot_running:
+                            if _start_bot_by_timer():
+                                _timer_log("Bot iniciado correctamente")
                             else:
-                                _timer_log("Bot ya estÃ¡ corriendo")
+                                _timer_log("ERROR: No se pudo iniciar el bot")
                         else:
-                            if ak in worker_app_paused:
-                                _resume_app_on_devices(ak)
-                            else:
-                                _timer_log(f"{ak.upper()} ya estÃ¡ activo, no necesita reanudar")
-                if t["stop_enabled"] and not t["stop_triggered"]:
-                    if now.hour == t["stop_hour"] and now.minute == t["stop_minute"]:
-                        t["stop_triggered"] = True
+                            _timer_log("Bot ya está corriendo")
+                    else:
+                        _timer_log(f"{ak.upper()} INICIO a las {now.strftime('%H:%M:%S')} ({fut})")
+                        if ak in worker_app_paused or _app_cfg_key(ak) in worker_app_paused:
+                            _resume_app_on_devices(ak)
+                        else:
+                            _timer_log(f"{ak.upper()} ya está activo, no necesita reanudar")
+                # ---- PARADA (una vez al día, se queda activo para mañana) ----
+                if _timer_due(now, t, "stop"):
+                    t["stop_last_date"] = today
+                    t["stop_triggered"] = True
+                    if not _timer_repeat_daily:
                         t["stop_enabled"] = False
-                        if ak == 'all':
-                            _timer_log(f"ALL PARADA a las {now.strftime('%H:%M:%S')} â€” deteniendo bot completo")
-                            try:
-                                _stop_bot()
-                                _timer_log("Bot detenido correctamente")
-                            except Exception as e:
-                                _timer_log(f"Error al detener bot: {e}")
-                        else:
-                            _pause_app_on_devices(ak)
+                    _save_timer_config()
+                    if not _timer_repeat_daily:
+                        fut = "temporizador desactivado (una sola vez)"
+                    else:
+                        fut = f"próximo: mañana {t['stop_hour']:02d}:{t['stop_minute']:02d}"
+                    if ak == 'all':
+                        _timer_log(f"ALL PARADA a las {now.strftime('%H:%M:%S')} — deteniendo bot completo ({fut})")
+                        try:
+                            _stop_bot()
+                            _timer_log("Bot detenido correctamente")
+                        except Exception as e:
+                            _timer_log(f"Error al detener bot: {e}")
+                    else:
+                        _timer_log(f"{ak.upper()} PAUSA a las {now.strftime('%H:%M:%S')} ({fut})")
+                        _pause_app_on_devices(ak)
         except Exception as e:
             _timer_log(f"Timer thread error: {e}")
         time.sleep(5)
@@ -9130,12 +9673,9 @@ def _stop_bot():
         worker_bot_running = False
         worker_app_paused.clear()
         proxy_blocked_devices.clear()
-        for ak in _per_app_timers:
-            if ak != 'all':
-                _per_app_timers[ak]['start_enabled'] = False
-                _per_app_timers[ak]['stop_enabled'] = False
-                _per_app_timers[ak]['start_triggered'] = False
-                _per_app_timers[ak]['stop_triggered'] = False
+        # OJO: los temporizadores por app NO se desactivan aquí. Antes se
+        # apagaban al detener el bot y tocaba configurarlos otra vez cada día.
+        # Ahora siguen activos y se repiten solos todos los días.
 
         apps_to_close = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
         try:
