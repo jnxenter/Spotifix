@@ -89,8 +89,8 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.2.4"
-GITHUB_REPO = "rogelioguzmantiti-hub/Spotifix"
+Bot_version = "5.2.5"
+GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
 
@@ -1937,7 +1937,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.2.4 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.2.5 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -3868,7 +3868,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.2.4"
+                            "text": "SonicPush STA 5.2.5"
                         }
                     }
                 ],
