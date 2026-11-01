@@ -1586,6 +1586,33 @@
     </div>
     <div id="settings" class="content-tab-scrollable">
         <h1>Settings</h1>
+        <div class="card card-large" style="padding: 14px 18px;">
+            <input type="text" id="settingsSearch" placeholder="Buscar ajuste..." autocomplete="off"
+                style="width: 230px; max-width: 100%; padding: 8px 10px; background:#1e1e2e; color:#e0e0e0; border:1px solid #444; border-radius:6px; font-size:13px;">
+            <div id="streamBonusPanel" style="display:none; margin-top:14px; border-top:1px solid #333; padding-top:12px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+                    <div>
+                        <div style="font-size:14px; font-weight:600;">Ajuste de visualizaci&oacute;n de streams</div>
+                        <div id="streamBonusStatus" style="font-size:12px; color:#888; margin-top:2px;">Cargando...</div>
+                    </div>
+                    <button type="button" id="streamBonusToggle" class="boton-elegante" style="padding:7px 12px; font-size:12px;">...</button>
+                </div>
+                <div id="streamBonusPercents" style="display:flex; gap:6px; flex-wrap:wrap; margin-top:12px;">
+                    <button type="button" class="stream-bonus-pct boton-elegante" data-pct="10" style="padding:6px 12px; font-size:12px;">10%</button>
+                    <button type="button" class="stream-bonus-pct boton-elegante" data-pct="20" style="padding:6px 12px; font-size:12px;">20%</button>
+                    <button type="button" class="stream-bonus-pct boton-elegante" data-pct="30" style="padding:6px 12px; font-size:12px;">30%</button>
+                    <button type="button" class="stream-bonus-pct boton-elegante" data-pct="50" style="padding:6px 12px; font-size:12px;">50%</button>
+                    <button type="button" class="stream-bonus-pct boton-elegante" data-pct="100" style="padding:6px 12px; font-size:12px;">100%</button>
+                </div>
+                <div style="display:flex; gap:6px; align-items:center; margin-top:10px; flex-wrap:wrap;">
+                    <input type="number" id="streamBonusCustom" min="0" max="1000" step="1" placeholder="Otro %"
+                        style="width:90px; padding:6px 8px; background:#1e1e2e; color:#e0e0e0; border:1px solid #444; border-radius:6px; font-size:12px;">
+                    <button type="button" id="streamBonusApply" class="boton-elegante" style="padding:6px 12px; font-size:12px;">Aplicar</button>
+                    <span id="streamBonusMsg" style="font-size:12px; color:#2ecc71;"></span>
+                </div>
+                <p class="login-help" style="margin:8px 0 0;">Solo cambia los n&uacute;meros en pantalla. La base de datos conserva el conteo real.</p>
+            </div>
+        </div>
         <div class="card card-large">
             <h2>Main Settings</h2>
             <form id="settingsForm">

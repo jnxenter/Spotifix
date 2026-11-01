@@ -90,7 +90,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.2.7"
+Bot_version = "5.2.8"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -2318,7 +2318,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.2.7 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.2.8 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -2584,12 +2584,51 @@ _daily_stats_lock = threading.Lock()
 # ---------------------------------------------------------------------------
 # Lo que se guarda en la BD (daily_stream_stat / monthly_stream_stat) es el
 # conteo REAL. Este porcentaje se aplica solo al MOSTRAR los numeros (Analytics,
-# Dashboard y Discord), asi el dato guardado sigue sirviendo para auditar y el
-# ajuste se puede cambiar o quitar sin tocar la base de datos.
-# Configuracion opcional en Files/stream_display.json:
-#     {"bonus_percent": 10}
+# Dashboard, Discord y grafico), asi el dato guardado sigue sirviendo para
+# auditar y el ajuste se puede cambiar o quitar sin tocar la base de datos.
+# El control esta oculto en Settings (buscador: escribir "10%").
+# Configuracion en Files/stream_display.json:
+#     {"enabled": true, "bonus_percent": 10}
 STREAM_DISPLAY_BONUS_DEFAULT = 10.0
-_stream_display_cache = {'ts': 0.0, 'pct': STREAM_DISPLAY_BONUS_DEFAULT}
+STREAM_DISPLAY_ENABLED_DEFAULT = True
+STREAM_DISPLAY_CONFIG_FILE = 'stream_display.json'
+_stream_display_cache = {
+    'ts': 0.0,
+    'pct': STREAM_DISPLAY_BONUS_DEFAULT if STREAM_DISPLAY_ENABLED_DEFAULT else 0.0,
+}
+
+
+def _stream_display_config_path():
+    return os.path.join(files, STREAM_DISPLAY_CONFIG_FILE)
+
+
+def _load_stream_display_config():
+    """Devuelve {'enabled': bool, 'bonus_percent': float} del archivo (o defaults)."""
+    cfg = {
+        'enabled': STREAM_DISPLAY_ENABLED_DEFAULT,
+        'bonus_percent': float(STREAM_DISPLAY_BONUS_DEFAULT),
+    }
+    try:
+        path = _stream_display_config_path()
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                raw = json.load(f) or {}
+            if 'enabled' in raw:
+                cfg['enabled'] = bool(raw.get('enabled'))
+            pct = float(raw.get('bonus_percent', cfg['bonus_percent']))
+            cfg['bonus_percent'] = max(0.0, min(pct, 1000.0))
+    except Exception:
+        pass
+    return cfg
+
+
+def _save_stream_display_config(cfg):
+    """Guarda la configuracion sin BOM y limpia la cache de inmediato."""
+    os.makedirs(files, exist_ok=True)
+    with open(_stream_display_config_path(), 'w', encoding='utf-8') as f:
+        json.dump(cfg, f)
+    _stream_display_cache['ts'] = 0.0
+    _stream_display_cache['pct'] = cfg['bonus_percent'] if cfg['enabled'] else 0.0
 
 
 def _stream_display_pct():
@@ -2597,15 +2636,8 @@ def _stream_display_pct():
     now = time.time()
     if (now - _stream_display_cache['ts']) < 30:
         return _stream_display_cache['pct']
-    pct = STREAM_DISPLAY_BONUS_DEFAULT
-    try:
-        path = os.path.join(files, 'stream_display.json')
-        if os.path.exists(path):
-            with open(path, 'r', encoding='utf-8-sig') as f:
-                cfg = json.load(f)
-            pct = float(cfg.get('bonus_percent', pct))
-    except Exception:
-        pass
+    cfg = _load_stream_display_config()
+    pct = cfg['bonus_percent'] if cfg['enabled'] else 0.0
     _stream_display_cache['pct'] = pct
     _stream_display_cache['ts'] = now
     return pct
@@ -2618,6 +2650,45 @@ def _shown_streams(value):
         return int(round(v * (1.0 + _stream_display_pct() / 100.0)))
     except Exception:
         return value
+
+
+@app.route('/get_stream_display', methods=['GET'])
+@require_token
+def get_stream_display():
+    """Config actual del ajuste de visualizacion (control oculto de Settings)."""
+    cfg = _load_stream_display_config()
+    return jsonify({
+        "enabled": cfg['enabled'],
+        "bonus_percent": cfg['bonus_percent'],
+        "effective_percent": cfg['bonus_percent'] if cfg['enabled'] else 0,
+        "default_bonus_percent": STREAM_DISPLAY_BONUS_DEFAULT,
+    })
+
+
+@app.route('/set_stream_display', methods=['POST'])
+@require_token
+def set_stream_display():
+    """Activa/desactiva o cambia el porcentaje mostrado. La BD no se toca."""
+    data = request.json or {}
+    cfg = _load_stream_display_config()
+    if 'enabled' in data:
+        cfg['enabled'] = bool(data.get('enabled'))
+    if 'bonus_percent' in data:
+        try:
+            pct = float(data.get('bonus_percent'))
+        except (TypeError, ValueError):
+            return jsonify({"success": False, "error": "bonus_percent invalido"}), 400
+        cfg['bonus_percent'] = max(0.0, min(pct, 1000.0))
+    try:
+        _save_stream_display_config(cfg)
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({
+        "success": True,
+        "enabled": cfg['enabled'],
+        "bonus_percent": cfg['bonus_percent'],
+        "effective_percent": cfg['bonus_percent'] if cfg['enabled'] else 0,
+    })
 
 
 def _daily_stream_date(now=None):
@@ -4269,7 +4340,10 @@ def send_discord_webhook(interval, url):
             cpu_usage = psutil.cpu_percent(1)
             ram_usage = psutil.virtual_memory()[2]
             elapsed_time = time.time() - start_time
-            streams_per_second = worker_streams_done / elapsed_time if elapsed_time > 0 else 0
+            # Las proyecciones (hora/dia/mes) tambien salen del total mostrado,
+            # para que Discord no mezcle el numero ajustado con proyecciones reales.
+            shown_total = _shown_streams(worker_streams_done)
+            streams_per_second = shown_total / elapsed_time if elapsed_time > 0 else 0
             streams_per_hour = streams_per_second * 3600
             streams_per_day = streams_per_hour * 24
             streams_per_month = streams_per_day * 30
@@ -4394,7 +4468,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.2.7"
+                            "text": "SonicPush STA 5.2.8"
                         }
                     }
                 ],

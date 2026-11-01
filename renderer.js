@@ -2326,6 +2326,156 @@ document.addEventListener('DOMContentLoaded', () => {
                     });
             }
 
+            // ---- Ajuste oculto de visualizacion de streams (Settings) ----
+            // Se revela solo al escribir un porcentaje exacto (ej. "10%") en el
+            // buscador de Settings. No aparece en ningun otro lado de la UI.
+            (function initStreamBonusControl() {
+                const search = document.getElementById('settingsSearch');
+                const panel = document.getElementById('streamBonusPanel');
+                if (!search || !panel) return;
+                const statusEl = document.getElementById('streamBonusStatus');
+                const toggleBtn = document.getElementById('streamBonusToggle');
+                const pctButtons = Array.prototype.slice.call(document.querySelectorAll('.stream-bonus-pct'));
+                const customInput = document.getElementById('streamBonusCustom');
+                const applyBtn = document.getElementById('streamBonusApply');
+                const msgEl = document.getElementById('streamBonusMsg');
+                let current = { enabled: true, bonus_percent: 10 };
+                let loaded = false;
+
+                function apiFetch(url, options) {
+                    return waitForToken().then(function (token) {
+                        const opts = options || {};
+                        opts.headers = Object.assign({}, opts.headers, {
+                            'Authorization': 'Bearer ' + token
+                        });
+                        return fetch(url, opts);
+                    });
+                }
+
+                function toNumber(value, fallback) {
+                    const n = Number(value);
+                    return isFinite(n) ? n : fallback;
+                }
+
+                function render() {
+                    const pct = toNumber(current.bonus_percent, 10);
+                    const active = !!current.enabled;
+                    statusEl.textContent = active
+                        ? ('ACTIVADO  \u00b7  +' + pct + '% en pantalla')
+                        : 'DESACTIVADO  \u00b7  se muestra el conteo sin ajuste';
+                    statusEl.style.color = active ? '#2ecc71' : '#888';
+                    toggleBtn.textContent = active ? 'Desactivar' : 'Activar';
+                    toggleBtn.style.background = active ? '#e74c3c' : '#2ecc71';
+                    pctButtons.forEach(function (btn) {
+                        const selected = Number(btn.getAttribute('data-pct')) === pct;
+                        btn.style.background = (selected && active) ? '#2ecc71' : '';
+                        btn.style.color = (selected && active) ? '#111' : '';
+                    });
+                    customInput.value = pct;
+                }
+
+                function showMsg(text, ok) {
+                    msgEl.textContent = text || '';
+                    msgEl.style.color = ok ? '#2ecc71' : '#e74c3c';
+                    if (text) {
+                        setTimeout(function () {
+                            if (msgEl.textContent === text) msgEl.textContent = '';
+                        }, 3500);
+                    }
+                }
+
+                function apply(patch) {
+                    const body = {
+                        enabled: current.enabled,
+                        bonus_percent: current.bonus_percent
+                    };
+                    Object.assign(body, patch || {});
+                    apiFetch('http://localhost:8999/set_stream_display', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    })
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            if (!data.success) throw new Error(data.error || 'No se pudo guardar');
+                            current = {
+                                enabled: !!data.enabled,
+                                bonus_percent: toNumber(data.bonus_percent, current.bonus_percent)
+                            };
+                            loaded = true;
+                            render();
+                            showMsg('Aplicado', true);
+                            try {
+                                if (typeof fetchDailyStreams === 'function') fetchDailyStreams();
+                            } catch (e) {}
+                        })
+                        .catch(function (err) {
+                            showMsg('Error: ' + (err.message || err), false);
+                        });
+                }
+
+                function loadConfig() {
+                    apiFetch('http://localhost:8999/get_stream_display')
+                        .then(function (r) { return r.json(); })
+                        .then(function (data) {
+                            current = {
+                                enabled: data.enabled !== false,
+                                bonus_percent: toNumber(data.bonus_percent, 10)
+                            };
+                            loaded = true;
+                            render();
+                        })
+                        .catch(function (err) {
+                            statusEl.textContent = 'No se pudo cargar: ' + (err.message || err);
+                        });
+                }
+
+                function maybeReveal() {
+                    const raw = (search.value || '').trim();
+                    const match = raw.match(/^\d{1,4}\s*%$/);
+                    if (!match) {
+                        panel.style.display = 'none';
+                        return;
+                    }
+                    panel.style.display = '';
+                    if (!loaded) {
+                        loadConfig();
+                    } else {
+                        render();
+                    }
+                }
+
+                search.addEventListener('input', maybeReveal);
+                toggleBtn.addEventListener('click', function () {
+                    if (!loaded) return;
+                    apply({ enabled: !current.enabled });
+                });
+                pctButtons.forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        if (!loaded) return;
+                        apply({
+                            enabled: true,
+                            bonus_percent: Number(btn.getAttribute('data-pct'))
+                        });
+                    });
+                });
+                applyBtn.addEventListener('click', function () {
+                    let pct = Number(customInput.value);
+                    if (!isFinite(pct) || pct < 0) {
+                        showMsg('Porcentaje invalido', false);
+                        return;
+                    }
+                    pct = Math.min(pct, 1000);
+                    apply({ enabled: true, bonus_percent: pct });
+                });
+                customInput.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        applyBtn.click();
+                    }
+                });
+            })();
+
             // ---- Android versions live table (Settings) ----
             var androidVersionsTimer = null;
 
