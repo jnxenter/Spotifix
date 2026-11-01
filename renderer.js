@@ -2452,6 +2452,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 }, 0);
             }
 
+            // "10.000 Spotify · 2.000 Tidal": deja claro de donde sale el total
+            // cuando el bot corre varias apps a la vez.
+            function appBreakdown(obj, onlyPositive) {
+                if (!obj) return '';
+                const pairs = [['spotify', 'Spotify'], ['tidal', 'Tidal'], ['apple_music', 'Apple']];
+                const parts = [];
+                pairs.forEach(function (p) {
+                    const v = Number(obj[p[0]]) || 0;
+                    if (!onlyPositive || v > 0) parts.push(formatKpiNumber(v) + ' ' + p[1]);
+                });
+                return parts.join('  ·  ');
+            }
+
             function renderDailyStreamsTable(days) {
                 const container = document.getElementById('dailyStreamsTable');
                 if (!container) return;
@@ -2501,15 +2514,20 @@ document.addEventListener('DOMContentLoaded', () => {
                         const best = summary.best_day;
 
                         setTextIfExists('kpiTodayValue', formatKpiNumber(today.total));
-                        setTextIfExists('kpiTodaySub', data.window
-                            ? (data.window.active ? 'Ventana activa 07:00-23:30' : 'Fuera de la ventana 07:00-23:30')
-                            : '');
+                        const todayBreakdown = appBreakdown(today, true);
+                        setTextIfExists('kpiTodaySub', todayBreakdown
+                            ? (todayBreakdown + '  =  todas las apps')
+                            : (data.window
+                                ? (data.window.active ? 'Ventana activa 07:00-23:30' : 'Fuera de la ventana 07:00-23:30')
+                                : ''));
                         const monthData = data.month || {};
                         setTextIfExists('kpiMonthValue', formatKpiNumber(monthData.total));
                         let monthSub = monthData.label || 'Sin datos este mes';
+                        const monthBreakdown = appBreakdown(monthData, true);
+                        if (monthBreakdown) monthSub += '  ·  ' + monthBreakdown;
                         const prevMonthTotal = Number(monthData.previous_total) || 0;
                         if (prevMonthTotal > 0) {
-                            monthSub += ' - mes anterior completo: ' + formatKpiNumber(prevMonthTotal);
+                            monthSub += '  ·  mes ant.: ' + formatKpiNumber(prevMonthTotal);
                         }
                         setTextIfExists('kpiMonthSub', monthSub);
                         setTextIfExists('kpiWeekValue', formatKpiNumber(summary.week_total));

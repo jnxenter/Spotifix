@@ -90,7 +90,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.2.6"
+Bot_version = "5.2.7"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -2318,7 +2318,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.2.6 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.2.7 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -2341,7 +2341,7 @@ def get_worker_threads():
             "app_key": value.get("app_key", "spotify"),
             "status": value["status"],
             "proxy": value["proxy"],
-            "streams": value.get("streams", 0),
+            "streams": _shown_streams(value.get("streams", 0)),
             "likes": value.get("likes", 0),
             "follows": value.get("follows", 0),
             "errors": value.get("errors", 0),
@@ -2434,10 +2434,10 @@ def get_worker_stats():
     global worker_bot_errors
     worker_devices_connected = _count_connected_devices()
     return jsonify({
-        "worker_streams_done": worker_streams_done,
-        "worker_streams_done_spotify": worker_streams_done_spotify,
-        "worker_streams_done_tidal": worker_streams_done_tidal,
-        "worker_streams_done_apple": worker_streams_done_apple,
+        "worker_streams_done": _shown_streams(worker_streams_done),
+        "worker_streams_done_spotify": _shown_streams(worker_streams_done_spotify),
+        "worker_streams_done_tidal": _shown_streams(worker_streams_done_tidal),
+        "worker_streams_done_apple": _shown_streams(worker_streams_done_apple),
         "worker_devices_connected": worker_devices_connected,
         "worker_successful_logins": worker_successful_logins,
         "worker_unsuccessful_logins": worker_unsuccessful_logins,
@@ -2469,7 +2469,7 @@ def get_dashboard():
             'panda_number': panda_num,
             'thread_key': key,
             'status': thread.get('status', ''),
-            'streams': thread.get('streams', 0),
+            'streams': _shown_streams(thread.get('streams', 0)),
             'errors': thread.get('errors', 0),
             'session_time': thread.get('session_time', 0),
         })
@@ -2536,10 +2536,10 @@ def get_dashboard():
 
     return jsonify({
         'bot_running': worker_bot_running,
-        'streams_done': worker_streams_done,
-        'streams_spotify': worker_streams_done_spotify,
-        'streams_tidal': worker_streams_done_tidal,
-        'streams_apple': worker_streams_done_apple,
+        'streams_done': _shown_streams(worker_streams_done),
+        'streams_spotify': _shown_streams(worker_streams_done_spotify),
+        'streams_tidal': _shown_streams(worker_streams_done_tidal),
+        'streams_apple': _shown_streams(worker_streams_done_apple),
         'streams_target': config_streams_to_do,
         'devices': devices_status,
         'apps': app_states,
@@ -2577,6 +2577,47 @@ _WEEKDAY_NAMES_ES = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabad
 _MONTH_NAMES_ES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
                    "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 _daily_stats_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Ajuste de visualizacion de streams (+10% por defecto)
+# ---------------------------------------------------------------------------
+# Lo que se guarda en la BD (daily_stream_stat / monthly_stream_stat) es el
+# conteo REAL. Este porcentaje se aplica solo al MOSTRAR los numeros (Analytics,
+# Dashboard y Discord), asi el dato guardado sigue sirviendo para auditar y el
+# ajuste se puede cambiar o quitar sin tocar la base de datos.
+# Configuracion opcional en Files/stream_display.json:
+#     {"bonus_percent": 10}
+STREAM_DISPLAY_BONUS_DEFAULT = 10.0
+_stream_display_cache = {'ts': 0.0, 'pct': STREAM_DISPLAY_BONUS_DEFAULT}
+
+
+def _stream_display_pct():
+    """Porcentaje extra que se suma al mostrar streams (cacheado 30 s)."""
+    now = time.time()
+    if (now - _stream_display_cache['ts']) < 30:
+        return _stream_display_cache['pct']
+    pct = STREAM_DISPLAY_BONUS_DEFAULT
+    try:
+        path = os.path.join(files, 'stream_display.json')
+        if os.path.exists(path):
+            with open(path, 'r', encoding='utf-8-sig') as f:
+                cfg = json.load(f)
+            pct = float(cfg.get('bonus_percent', pct))
+    except Exception:
+        pass
+    _stream_display_cache['pct'] = pct
+    _stream_display_cache['ts'] = now
+    return pct
+
+
+def _shown_streams(value):
+    """Conteo de streams tal como se muestra en la UI (real + ajuste)."""
+    try:
+        v = float(value or 0)
+        return int(round(v * (1.0 + _stream_display_pct() / 100.0)))
+    except Exception:
+        return value
 
 
 def _daily_stream_date(now=None):
@@ -2684,9 +2725,10 @@ def get_daily_streams():
         d = start_day + timedelta(days=i)
         ds = d.strftime("%Y-%m-%d")
         apps = by_day.get(ds, {})
-        spotify = apps.get('spotify', 0)
-        tidal = apps.get('tidal', 0)
-        apple = apps.get('apple_music', 0)
+        # + ajuste de visualizacion (la BD guarda el dato real)
+        spotify = _shown_streams(apps.get('spotify', 0))
+        tidal = _shown_streams(apps.get('tidal', 0))
+        apple = _shown_streams(apps.get('apple_music', 0))
         result_days.append({
             "date": ds,
             "weekday": _WEEKDAY_NAMES_ES[d.weekday()],
@@ -2710,9 +2752,10 @@ def get_daily_streams():
                     "apple_music": 0, "total": 0}
         rows_m = MonthlyStreamStat.query.filter_by(month=month_str).all()
         apps_m = {r.app: int(r.count or 0) for r in rows_m}
-        sp = apps_m.get('spotify', 0)
-        td = apps_m.get('tidal', 0)
-        ap = apps_m.get('apple_music', 0)
+        # + ajuste de visualizacion (la BD guarda el dato real)
+        sp = _shown_streams(apps_m.get('spotify', 0))
+        td = _shown_streams(apps_m.get('tidal', 0))
+        ap = _shown_streams(apps_m.get('apple_music', 0))
         try:
             y, m = month_str.split('-')
             label = f"{_MONTH_NAMES_ES[int(m) - 1]} {y}"
@@ -2766,11 +2809,28 @@ def get_streams_done():
     except ValueError:
         return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
 
-    streams = StreamRecord.query.filter(StreamRecord.timestamp >= start_date,
-                                        StreamRecord.timestamp <= end_date).all()
+    streams = (StreamRecord.query
+               .filter(StreamRecord.timestamp >= start_date,
+                       StreamRecord.timestamp < end_date + timedelta(days=1))
+               .order_by(StreamRecord.timestamp.asc(), StreamRecord.id.asc())
+               .all())
+
+    # `streams_done` es un contador ACUMULADO por corrida: el grafico sumaba los
+    # valores tal cual y salian millones (cada registro repetia el total). Ahora
+    # se manda el incremento real de cada dia, ya con el ajuste de visualizacion.
+    per_day = {}
+    prev = None
+    for stream in streams:
+        val = int(stream.streams_done or 0)
+        delta = val if (prev is None or val < prev) else val - prev
+        prev = val
+        day = stream.timestamp.strftime('%Y-%m-%d')
+        per_day[day] = per_day.get(day, 0) + delta
+
     streams_list = [
-        {"timestamp": stream.timestamp.strftime('%Y-%m-%d %H:%M:%S'), "streams_done": stream.streams_done} for
-        stream in streams]
+        {"timestamp": day + " 00:00:00", "streams_done": _shown_streams(total)}
+        for day, total in sorted(per_day.items())
+    ]
 
     return jsonify({"streams": streams_list})
 
@@ -4257,25 +4317,25 @@ def send_discord_webhook(interval, url):
                             {
                             "id": 53898218,
                                 "name": "Streams (Total):",
-                                "value": str(worker_streams_done),
+                                "value": str(_shown_streams(worker_streams_done)),
                                 "inline": True
                             },
                             {
                             "id": 53898219,
                                 "name": "└ Spotify:",
-                                "value": str(worker_streams_done_spotify),
+                                "value": str(_shown_streams(worker_streams_done_spotify)),
                                 "inline": True
                             },
                             {
                             "id": 53898220,
                                 "name": "└ Tidal:",
-                                "value": str(worker_streams_done_tidal),
+                                "value": str(_shown_streams(worker_streams_done_tidal)),
                                 "inline": True
                             },
                             {
                             "id": 53898221,
                                 "name": "└ Apple Music:",
-                                "value": str(worker_streams_done_apple),
+                                "value": str(_shown_streams(worker_streams_done_apple)),
                                 "inline": True
                             },
                             {
@@ -4334,7 +4394,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.2.6"
+                            "text": "SonicPush STA 5.2.7"
                         }
                     }
                 ],
