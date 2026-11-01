@@ -804,7 +804,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     let msg = `ADB reiniciado: ${data.after} dispositivo(s) detectado(s)`;
                     if (data.before !== data.after) msg += ` (antes ${data.before})`;
-                    if (data.missing && data.missing.length) msg += `\nNo volvieron: ${data.missing.join(', ')}`;
+                    if (typeof data.known === 'number') msg += `\nTeléfonos conocidos: ${data.known}`;
+                    if (data.missing && data.missing.length) {
+                        const shown = data.missing.slice(0, 12).join(', ');
+                        const extra = data.missing.length > 12 ? ` y ${data.missing.length - 12} más` : '';
+                        msg += `\nNo volvieron (${data.missing.length}): ${shown}${extra}`;
+                    }
                     alert(msg);
                     fetchDevices();
                 } catch (e) {
@@ -862,7 +867,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 })
                     .then(response => response.json())
                     .then(data => {
-                        document.getElementById('scrapeDevicesLen').textContent = `Connected Devices: ${data.devices.length}`;
+                        const onlineCount = (typeof data.online === 'number') ? data.online : data.devices.length;
+                        let devicesLabel = `Connected Devices: ${onlineCount}`;
+                        if (typeof data.offline === 'number' && data.offline > 0) {
+                            devicesLabel += ` (${data.offline} sin responder)`;
+                        }
+                        document.getElementById('scrapeDevicesLen').textContent = devicesLabel;
                         const devicesTableBody = document.querySelector('#devicesTable tbody');
                         devicesTableBody.innerHTML = ''; // Clear existing rows
             
@@ -2494,6 +2504,14 @@ document.addEventListener('DOMContentLoaded', () => {
                         setTextIfExists('kpiTodaySub', data.window
                             ? (data.window.active ? 'Ventana activa 07:00-23:30' : 'Fuera de la ventana 07:00-23:30')
                             : '');
+                        const monthData = data.month || {};
+                        setTextIfExists('kpiMonthValue', formatKpiNumber(monthData.total));
+                        let monthSub = monthData.label || 'Sin datos este mes';
+                        const prevMonthTotal = Number(monthData.previous_total) || 0;
+                        if (prevMonthTotal > 0) {
+                            monthSub += ' - mes anterior completo: ' + formatKpiNumber(prevMonthTotal);
+                        }
+                        setTextIfExists('kpiMonthSub', monthSub);
                         setTextIfExists('kpiWeekValue', formatKpiNumber(summary.week_total));
                         setTextIfExists('kpiWeekSub', 'Zona: ' + (data.timezone || '--') + ' - 7 dias');
                         setTextIfExists('kpiAvgValue', formatKpiNumber(summary.avg_per_active_day));

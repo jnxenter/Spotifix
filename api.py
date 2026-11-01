@@ -57,6 +57,7 @@ from time import sleep
 from bs4 import BeautifulSoup
 from fp.fp import FreeProxy
 import adbutils
+from concurrent.futures import ThreadPoolExecutor
 def resource_path(relative_path):
     """ Get the absolute path to the resource, works for both development and packaged executables """
     if hasattr(sys, '_MEIPASS'):
@@ -89,7 +90,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.2.5"
+Bot_version = "5.2.6"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -126,10 +127,36 @@ if os.name == 'nt':
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
-try:
-    adb_path = adbutils.adb_path()
-except Exception:
-    adb_path = 'adb'
+def _pick_adb_path():
+    """Elige que ejecutable de adb usa SonicPush.
+
+    Panda y Sonic comparten el MISMO servidor adb (puerto 5037). Si cada app
+    trae una version distinta del cliente adb, cada una mata el servidor de la
+    otra ("adb server version doesn't match ... killing") y cada reinicio del
+    servidor tira todas las conexiones por red: Sonic ve 18 telefonos aunque
+    Panda tenga 40. Por eso preferimos el adb de Panda (misma version que el
+    que mantiene los telefonos conectados) y dejamos el nuestro como respaldo.
+    """
+    candidates = [
+        os.environ.get('SPOTIFIX_ADB_PATH'),
+        r'C:\Program Files (x86)\panda_android\tools\adb.exe',
+        os.path.join(os.path.expandvars('%APPDATA%'), 'Spotifix', 'Spotify Mobile', 'Files', 'Adb', 'adb.exe'),
+        r'C:\platform-tools\adb.exe',
+        os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Android', 'Sdk', 'platform-tools', 'adb.exe'),
+    ]
+    for c in candidates:
+        try:
+            if c and os.path.isfile(c):
+                return c
+        except Exception:
+            continue
+    try:
+        return adbutils.adb_path()
+    except Exception:
+        return 'adb'
+
+
+adb_path = _pick_adb_path()
 
 # Checksum and KeyAuth initialization removed
 
@@ -178,6 +205,25 @@ class DailyStreamStat(db.Model):
 
     def __repr__(self):
         return f'<DailyStreamStat {self.date} {self.app}={self.count}>'
+
+
+class MonthlyStreamStat(db.Model):
+    """Streams contados por mes y por app (Spotify/Tidal/Apple).
+
+    Igual que DailyStreamStat pero acumulado por mes ('YYYY-MM'). No se borra:
+    sirve para el total mensual/historico. Vive en batches.db, asi que
+    sobrevive al cierre de la app.
+    """
+    id = db.Column(db.Integer, primary_key=True)
+    month = db.Column(db.String(7), nullable=False)    # YYYY-MM (zona del temporizador)
+    app = db.Column(db.String(20), nullable=False)     # spotify | tidal | apple_music
+    count = db.Column(db.Integer, nullable=False, default=0)
+    updated_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (db.UniqueConstraint('month', 'app', name='uq_monthly_stream_month_app'),)
+
+    def __repr__(self):
+        return f'<MonthlyStreamStat {self.month} {self.app}={self.count}>'
 
 
 class Device(db.Model):
@@ -1421,6 +1467,7 @@ def get_apple_accounts():
 
 def _adb_serials(only_online: bool = True):
     """Seriales de `adb devices` (solo conectados o todos, incluidos offline)."""
+    serials = []
     try:
         result = subprocess.run(
             [adb_path, 'devices'],
@@ -1432,8 +1479,7 @@ def _adb_serials(only_online: bool = True):
         )
         out = result.stdout or ''
     except Exception:
-        return []
-    serials = []
+        return serials
     for line in out.splitlines():
         if '\t' not in line:
             continue
@@ -1445,7 +1491,262 @@ def _adb_serials(only_online: bool = True):
         if only_online and state != 'device':
             continue
         serials.append(serial)
+    if only_online and serials:
+        _adb_remember(serials)
     return serials
+
+
+# --- Memoria de telefonos vistos + auto-reconexion -------------------------
+# Cada vez que adb lista telefonos se guardan sus seriales. Si mas tarde
+# "desaparecen" (tipico cuando Panda y Sonic reinician el servidor adb o cuando
+# se cae el WiFi de un telefono), un hilo los vuelve a conectar solo: no hay
+# que darle "Restart ADB" a mano ni volver a escribir las IPs.
+_adb_known_lock = threading.Lock()
+_adb_known_cache = None
+_multi_focus_started = set()   # seriales a los que ya se les intento activar Multi Audio Focus
+
+
+def _adb_known_path():
+    return os.path.join(files, 'adb_known_serials.json')
+
+
+def _adb_load_known():
+    global _adb_known_cache
+    with _adb_known_lock:
+        if _adb_known_cache is not None:
+            return list(_adb_known_cache)
+        data = []
+        try:
+            with open(_adb_known_path(), 'r') as f:
+                raw = json.load(f)
+            if isinstance(raw, list):
+                data = [str(s) for s in raw if s]
+        except Exception:
+            data = []
+        _adb_known_cache = data
+        return list(data)
+
+
+def _adb_remember(serials):
+    """Agrega seriales a la memoria (solo escribe el archivo si cambio algo)."""
+    global _adb_known_cache
+    if not serials:
+        return
+    with _adb_known_lock:
+        current = list(_adb_known_cache if _adb_known_cache is not None else [])
+        if _adb_known_cache is None:
+            try:
+                with open(_adb_known_path(), 'r') as f:
+                    raw = json.load(f)
+                if isinstance(raw, list):
+                    current = [str(s) for s in raw if s]
+            except Exception:
+                current = []
+        merged = list(dict.fromkeys(current + [s for s in serials if s]))
+        changed = merged != current
+        _adb_known_cache = merged
+        if not changed:
+            return
+        try:
+            os.makedirs(os.path.dirname(_adb_known_path()), exist_ok=True)
+            with open(_adb_known_path(), 'w') as f:
+                json.dump(merged, f)
+        except Exception:
+            pass
+
+
+def _panda_serials():
+    """Seriales registrados en la base de Panda (aunque ahora esten apagados)."""
+    try:
+        import sqlite3 as sqlite3_mod
+        db_path = os.path.join(os.path.expandvars('%APPDATA%'), '6WPTMA9HZO', 'device.db')
+        if not os.path.exists(db_path):
+            return []
+        conn = sqlite3_mod.connect(db_path)
+        rows = conn.execute("SELECT onlySerial FROM device WHERE userDelete=0").fetchall()
+        conn.close()
+        return [str(r[0]) for r in rows if r and r[0]]
+    except Exception:
+        return []
+
+
+def _adb_known_all():
+    return list(dict.fromkeys(_adb_load_known() + _panda_serials()))
+
+
+def _adb_devices_raw():
+    """Lista de `adb devices -l` ya parseada (conectados, offline y no autorizados).
+
+    Devuelve dicts con: serial, state, model, product, device, transport_id.
+    """
+    out = []
+    try:
+        result = subprocess.run(
+            [adb_path, 'devices', '-l'],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            timeout=25, startupinfo=startupinfo
+        )
+        text = result.stdout or ''
+    except Exception:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if (not line or line.startswith('*')
+                or line.lower().startswith('list of devices')):
+            continue
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        serial, state = parts[0], parts[1]
+        meta = {}
+        for token in parts[2:]:
+            if ':' in token:
+                k, _, v = token.partition(':')
+                meta[k] = v
+        out.append({
+            'serial': serial,
+            'state': state,
+            'model': (meta.get('model') or '').replace('_', ' ').strip(),
+            'product': meta.get('product', ''),
+            'device': meta.get('device', ''),
+            'transport_id': meta.get('transport_id', ''),
+            'is_local_mirror': serial.startswith('127.0.0.1:'),
+        })
+    return out
+
+
+def _device_props_fast(serial, ttl_seconds=90):
+    """Todos los datos del telefono en UNA sola llamada adb (rapido y a prueba de caidos).
+
+    Antes /scrape_devices hacia 5 llamadas por telefono (4 getprop + dumpsys).
+    Con 40 telefonos, y alguno que no responda, eso tardaba minutos y el listado
+    se quedaba corto. Una sola llamada por telefono deja el costo constante.
+    """
+    key = ('props_all', serial)
+    now = time.time()
+    val = _prop_cache.get(key)
+    if val is not None and (now - val[0]) < ttl_seconds:
+        return val[1]
+    cmd = (
+        'echo @m=; getprop ro.product.manufacturer; '
+        'echo @d=; getprop ro.product.model; '
+        'echo @s=; getprop ro.serialno; '
+        'echo @a=; getprop ro.build.version.release; '
+        'echo @v=; dumpsys package com.spotify.music | grep -m1 versionName'
+    )
+    try:
+        with _adb_sem:
+            r = subprocess.run(
+                [adb_path, '-s', serial, 'shell', cmd],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=15, startupinfo=startupinfo
+            )
+        out = r.stdout or ''
+    except Exception:
+        out = ''
+    info = {
+        'manufacturer': '', 'model': '', 'hardware_id': '',
+        'android_version': '', 'spotify_version': None,
+    }
+    marks = {'@m=': 'manufacturer', '@d=': 'model', '@s=': 'hardware_id',
+             '@a=': 'android_version', '@v=': 'spotify_version'}
+    cur = None
+    for line in out.splitlines():
+        line = line.strip()
+        if line in marks:
+            cur = marks[line]
+            continue
+        if not cur or not line:
+            continue
+        if cur == 'spotify_version':
+            if 'versionName=' in line:
+                info['spotify_version'] = line.split('versionName=')[-1].strip()
+                cur = None
+        else:
+            info[cur] = line
+            cur = None
+    _prop_cache[key] = (now, info)
+    return info
+
+
+def _adb_heal_once(max_attempts=30, extra=None):
+    """Reconecta los telefonos que falten. Devuelve (recuperados, siguen_faltando).
+
+    Se limita a `max_attempts` por pasada y prioriza los que ya funcionaron
+    antes: la base de Panda guarda tambien telefonos viejos que ya no existen y
+    reconectar 100 seriales muertos bloquearia el hilo.
+    """
+    online = set(_adb_serials(only_online=True))
+    remembered = _adb_load_known()
+    known = list(dict.fromkeys(_adb_known_all() + list(extra or [])))
+    missing = [s for s in known if s not in online]
+    if not missing:
+        return 0, []
+    missing.sort(key=lambda s: (s not in remembered, s))
+    try:
+        subprocess.run([adb_path, 'reconnect', 'offline'], capture_output=True,
+                       text=True, timeout=20, startupinfo=startupinfo)
+    except Exception:
+        pass
+    for serial in missing[:max_attempts]:
+        try:
+            cmd = 'connect' if ':' in serial else 'reconnect'
+            subprocess.run([adb_path, cmd, serial], capture_output=True,
+                           text=True, timeout=10, startupinfo=startupinfo)
+        except Exception:
+            pass
+    time.sleep(1.2)
+    online_after = set(_adb_serials(only_online=True))
+    still = [s for s in known if s not in online_after]
+    return len(online_after) - len(online), still
+
+
+_adb_heal_fail_streak = 0
+
+
+def _adb_heal_worker():
+    """Cada 30s revisa que no se hayan perdido telefonos y los reconecta."""
+    time.sleep(25)
+    first_pass = True
+    while not _dashboard_worker_stop.is_set():
+        try:
+            online = _adb_serials(only_online=True)
+            _adb_remember(online)
+            remembered = _adb_load_known()
+            missing = [s for s in remembered if s not in set(online)]
+            # En la primera pasada se intentan tambien los seriales que solo
+            # conoce Panda (asi se recuperan telefonos la primera vez).
+            panda_only = []
+            if first_pass:
+                panda_only = [s for s in _panda_serials()
+                              if s not in set(online) and s not in remembered]
+                first_pass = False
+            if missing or panda_only:
+                gained, still = _adb_heal_once(
+                    max_attempts=30 if missing else 25,
+                    extra=panda_only)
+                global _adb_heal_fail_streak
+                if gained > 0:
+                    _adb_heal_fail_streak = 0
+                    add_log("SUCC", "adb", f"ADB: reconectados {gained} telefonos "
+                                          f"({len(online)} -> {len(online) + gained} de {len(remembered)})")
+                else:
+                    _adb_heal_fail_streak += 1
+                    # no llenar el log: avisar a la primera y luego cada 10 intentos
+                    if _adb_heal_fail_streak == 1 or _adb_heal_fail_streak % 10 == 0:
+                        add_log("WARN", "adb", f"ADB: {len(missing)} telefonos siguen sin aparecer "
+                                              f"({len(online)} conectados de {len(remembered)})")
+            else:
+                _adb_heal_fail_streak = 0
+        except Exception:
+            pass
+        try:
+            for _ in range(30):
+                if _dashboard_worker_stop.is_set():
+                    break
+                time.sleep(1)
+        except Exception:
+            break
 
 
 @app.route('/restart_adb', methods=['POST'])
@@ -1461,9 +1762,20 @@ def restart_adb():
     t0 = time.time()
     before = _adb_serials(only_online=True)
     try:
-        tcp_before = [s for s in _adb_serials(only_online=False) if ':' in s]
+        all_before = _adb_serials(only_online=False)
     except Exception:
-        tcp_before = []
+        all_before = []
+    # reconectar TODO lo que conocemos: los de red actuales, los guardados y los
+    # que Panda tiene registrados (aunque ahora esten apagados o desconectados).
+    # Se prioriza lo recordado y se limita para no tardar minutos con historicos.
+    remembered = _adb_load_known()
+    tcp_before = list(dict.fromkeys(
+        [s for s in all_before if ':' in s]
+        + [s for s in remembered if ':' in s]
+        + [s for s in _panda_serials() if ':' in s]
+    ))
+    tcp_before.sort(key=lambda s: s not in remembered)
+    tcp_before = tcp_before[:40]
 
     errors = []
     for args in (['kill-server'], ['start-server']):
@@ -1508,7 +1820,9 @@ def restart_adb():
             last_count = len(after)
         time.sleep(1)
 
-    missing = [s for s in before if s not in after]
+    known_all = _adb_known_all()
+    # solo reintenta/reporta los que ya funcionaron antes (no el historico de Panda)
+    missing = [s for s in dict.fromkeys(before + remembered) if s not in after][:40]
     for serial in missing:
         try:
             if ':' in serial:
@@ -1522,13 +1836,15 @@ def restart_adb():
     if missing:
         time.sleep(1.5)
         after = _adb_serials(only_online=True)
-        missing = [s for s in before if s not in after]
+        missing = [s for s in dict.fromkeys(before + remembered) if s not in after]
 
-    add_log("INFO", "Main", f"ADB reiniciado: {len(before)} -> {len(after)} dispositivos")
+    add_log("INFO", "Main", f"ADB reiniciado: {len(before)} -> {len(after)} dispositivos "
+                           f"({len(known_all)} conocidos)")
     return jsonify({
         "success": True,
         "before": len(before),
         "after": len(after),
+        "known": len(known_all),
         "missing": missing,
         "elapsed_ms": round((time.time() - t0) * 1000),
         "error": "; ".join(errors),
@@ -1539,96 +1855,161 @@ def restart_adb():
 @require_token
 def scrape_devices():
     try:
-        # Run the adb devices command
-        result = subprocess.run(
-            [adb_path, 'devices'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            startupinfo=startupinfo
-        )
-        devices_output = result.stdout.strip().splitlines()[1:]
+        raw = _adb_devices_raw()
+        if not raw:
+            return jsonify({'devices': [], 'total': 0, 'online': 0, 'offline': 0,
+                            'known': len(_adb_known_all()),
+                            'missing_known': _adb_load_known(),
+                            'adb_path': adb_path}), 200
+
+        def _props(d):
+            base = {
+                'udid': d['serial'],
+                'status': d['state'],
+                'model': d['model'] or '',
+                'manufacturer': '',
+                'hardware_id': '',
+                'android_version': '',
+                'spotify_version': '',
+            }
+            if d['state'] == 'device':
+                try:
+                    p = _device_props_fast(d['serial'])
+                    base['manufacturer'] = p.get('manufacturer') or ''
+                    base['model'] = base['model'] or (p.get('model') or '')
+                    base['hardware_id'] = p.get('hardware_id') or ''
+                    base['android_version'] = p.get('android_version') or ''
+                    base['spotify_version'] = p.get('spotify_version') or ''
+                except Exception:
+                    pass
+            return base
+
+        # En paralelo: con 40 telefonos ya no tardaba minutos ni se cortaba la lista
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            infos = list(ex.map(_props, raw))
+        infos.sort(key=lambda i: (i['status'] != 'device', i['udid']))
+
         devices = []
-
         with app.app_context():
-            for line in devices_output:
-                if '\t' in line:
-                    udid, status = line.split('\t')
-
-                    # Get additional device info (e.g., manufacturer, model, hardware ID)
-                    manufacturer = get_device_manufacturer(udid)
-                    model = get_device_model(udid)
-                    hardware_id = get_device_hardware_id(udid)
-                    android_version = get_device_android_version(udid)
-                    spotify_version = get_device_spotify_version(udid)
-
-                    # Check if the device already exists in the database
-                    existing_device = Device.query.filter_by(
-                        manufacturer=manufacturer,
-                        model=model,
-                        hardware_id=hardware_id
-                    ).first()
-
-                    if existing_device:
-                        # Update the device's udid and connected status
-                        existing_device.udid = udid  # Since udid can change
-                        existing_device.connected = True
-                        existing_device.spotify_version = spotify_version
-                        add_log("INFO", "Main", f"Device {udid} already registered, updating udid and setting connected to True.")
-                        logged_in = existing_device.logged_in  # Get logged_in status from DB
-                        bindedAccount = existing_device.bindedAccount
-                        bindedProxy = existing_device.bindedProxy
-                        accountType = existing_device.accountType
-                    else:
-                        # Add a new device to the database with default logged_in status
-                        new_device = Device(
+            for info in infos:
+                udid = info['udid']
+                dev = None
+                try:
+                    # Identidad = serial (udid). Antes se buscaba por
+                    # (manufacturer, model, hardware_id): con 40 telefonos del
+                    # mismo modelo TODOS caian en la misma fila.
+                    dev = Device.query.filter_by(udid=udid).first()
+                    if dev is None:
+                        dev = Device(
                             udid=udid,
-                            manufacturer=manufacturer,
-                            model=model,
-                            hardware_id=hardware_id,
-                            android_version=android_version,
-                            spotify_version=spotify_version,
-                            connected=True,
-                            bindedAccount='/',
-                            bindedProxy='/',
-                            accountType='/',
-                            logged_in=False,  # Default to False when a new device is added
-                            local_code=str(uuid.uuid4())[:8]  # Generate a unique local_code if needed
+                            manufacturer=info['manufacturer'] or 'Unknown',
+                            model=info['model'] or 'Unknown',
+                            hardware_id=info['hardware_id'] or udid,
+                            android_version=info['android_version'],
+                            spotify_version=info['spotify_version'],
+                            connected=(info['status'] == 'device'),
+                            bindedAccount='/', bindedProxy='/', accountType='/',
+                            logged_in=False,
+                            local_code=str(uuid.uuid4())[:8],
                         )
-                        db.session.add(new_device)
+                        db.session.add(dev)
+                        db.session.flush()
                         add_log("INFO", "Main", f"New device {udid} added to the database.")
-                        logged_in = False  # Default for new devices
-                        bindedAccount = '/'
-                        bindedProxy = '/'
-                        accountType = '/'
-
-                    # Commit the changes
+                    else:
+                        dev.connected = (info['status'] == 'device')
+                        if info['spotify_version']:
+                            dev.spotify_version = info['spotify_version']
+                        if info['manufacturer'] and dev.manufacturer in (None, '', 'Unknown'):
+                            dev.manufacturer = info['manufacturer']
+                        if info['model'] and dev.model in (None, '', 'Unknown'):
+                            dev.model = info['model']
+                        if info['android_version']:
+                            dev.android_version = info['android_version']
+                        if info['hardware_id'] and not dev.hardware_id:
+                            dev.hardware_id = info['hardware_id']
                     db.session.commit()
+                except Exception:
+                    db.session.rollback()
+                    if dev is None:
+                        continue
 
-                    # Enable Multi Audio Focus on every detected device
+                # Multi Audio Focus: una vez por serial y proceso (no 40 hilos por scrape)
+                if info['status'] == 'device' and udid not in _multi_focus_started:
+                    _multi_focus_started.add(udid)
                     try:
-                        threading.Thread(target=_enable_multi_audio_focus, args=(udid,), daemon=True).start()
-                    except:
+                        threading.Thread(target=_enable_multi_audio_focus,
+                                         args=(udid,), daemon=True).start()
+                    except Exception:
                         pass
 
-                    # Add the device details to the response
-                    devices.append({
-                        'udid': udid,
-                        'status': status,
-                        'manufacturer': manufacturer,
-                        'model': model,
-                        'hardware_id': hardware_id,
-                        'android_version': android_version,
-                        'spotify_version': spotify_version,
-                        'bindedAccount': bindedAccount,
-                        'bindedProxy': bindedProxy,
-                        'accountType': accountType,
-                        'logged_in': logged_in  # Include the logged_in status
-                    })
+                info['bindedAccount'] = dev.bindedAccount or '/'
+                info['bindedProxy'] = dev.bindedProxy or '/'
+                info['accountType'] = dev.accountType or '/'
+                info['logged_in'] = bool(dev.logged_in)
+                info['connected'] = (info['status'] == 'device')
+                devices.append(info)
 
-        return jsonify({'devices': devices}), 200
+        online = [d for d in devices if d['status'] == 'device']
+        seen = set(d['udid'] for d in devices)
+        remembered = _adb_load_known()
+        return jsonify({
+            'devices': devices,
+            'total': len(devices),
+            'online': len(online),
+            'offline': len(devices) - len(online),
+            'known': len(_adb_known_all()),
+            'missing_known': [s for s in remembered if s not in seen],
+            'adb_path': adb_path,
+        }), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/adb_diagnostics', methods=['GET'])
+@require_token
+def adb_diagnostics():
+    """Radiografia del ADB: sirve para ver exactamente por que faltan telefonos.
+
+    Devuelve cuantos ve el servidor adb (por estado), cuantos cuenta Sonic,
+    cuantos seriales conoce (Sonic + base de Panda) y cuales no responden.
+    """
+    raw = _adb_devices_raw()
+    states = {}
+    for d in raw:
+        states[d['state']] = states.get(d['state'], 0) + 1
+    online = [d['serial'] for d in raw if d['state'] == 'device']
+    remembered = _adb_load_known()
+    panda = _panda_serials()
+    try:
+        ver = subprocess.run([adb_path, 'version'], stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, timeout=15,
+                             startupinfo=startupinfo)
+        adb_version = ' | '.join((ver.stdout or '').strip().splitlines()[:2])
+    except Exception:
+        adb_version = ''
+    server_pid = None
+    try:
+        out = subprocess.run(['netstat', '-ano'], capture_output=True, text=True,
+                             timeout=10).stdout or ''
+        for line in out.splitlines():
+            if ':5037' in line and 'LISTENING' in line.upper():
+                server_pid = line.split()[-1]
+                break
+    except Exception:
+        pass
+    return jsonify({
+        'adb_path': adb_path,
+        'adb_version': adb_version,
+        'server_pid': server_pid,
+        'devices_total': len(raw),
+        'states': states,
+        'online': len(online),
+        'counted': _count_connected_devices(),
+        'remembered_total': len(remembered),
+        'panda_total': len(panda),
+        'missing_remembered': [s for s in remembered if s not in set(online)],
+        'local_mirrors': [d['serial'] for d in raw if d['is_local_mirror']],
+    })
 
 
 @app.route('/panda_numbers', methods=['GET'])
@@ -1937,7 +2318,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.2.5 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.2.6 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -1971,25 +2352,71 @@ def get_worker_threads():
     return jsonify({"bot_running": worker_bot_running, "threads": list(worker_threads_serializable.values())})
 
 
-def _count_connected_devices():
-    """Count currently connected ADB devices dynamically, deduplicating Panda TCP mirrors by udid."""
+def _device_identity(serial, ttl_seconds=300):
+    """Identidad real del telefono (ro.serialno + android_id) para no contarlo 2 veces.
+
+    En los Samsung con OneUI reciente `ro.serialno` viene vacio, asi que se usa
+    `settings get secure android_id`, que es unico por telefono y no necesita root.
+    """
+    key = ('identity', serial)
+    now = time.time()
+    val = _prop_cache.get(key)
+    if val is not None and (now - val[0]) < ttl_seconds:
+        return val[1]
+    ident = ''
     try:
-        result = subprocess.run([adb_path, 'devices', '-l'], capture_output=True, text=True, timeout=5, startupinfo=startupinfo)
-        seen_udids = set()
-        panda_udids = set()
-        for line in result.stdout.strip().split('\n')[1:]:
-            if '\tdevice' not in line and '   device ' not in line:
+        with _adb_sem:
+            r = subprocess.run(
+                [adb_path, '-s', serial, 'shell',
+                 'getprop ro.serialno; settings get secure android_id'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=8, startupinfo=startupinfo
+            )
+        parts = [ln.strip() for ln in (r.stdout or '').splitlines() if ln.strip()]
+        ident = '|'.join(parts)
+    except Exception:
+        ident = ''
+    _prop_cache[key] = (now, ident)
+    return ident
+
+
+_count_cache = {'ts': 0.0, 'value': 0}
+
+
+def _count_connected_devices():
+    """Telefonos conectados de verdad (state=device), sin perder los espejos de Panda.
+
+    Antes se descartaban TODOS los seriales 127.0.0.1:*, que son justo los
+    telefonos que Panda espeja: con 40 moviles conectados por Panda el contador
+    se quedaba en los pocos que ademas estaban enganchados por IP real
+    (el tipico "Panda me muestra 40 y Sonic 18"). Ahora se cuentan todos y solo
+    se descarta un duplicado cuando es el MISMO telefono (mismo serial/android_id).
+    """
+    now = time.time()
+    if (now - _count_cache['ts']) < 8 and _count_cache['value']:
+        return _count_cache['value']
+    try:
+        devs = [d for d in _adb_devices_raw() if d['state'] == 'device']
+        if not devs:
+            return worker_devices_connected
+        seen = set()
+        total = 0
+        # Solo hace falta resolver la identidad si Panda expone algun espejo
+        # (127.0.0.1:*) que pueda ser el mismo telefono repetido.
+        if any(d['is_local_mirror'] for d in devs):
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                idents = list(ex.map(_device_identity, [d['serial'] for d in devs]))
+        else:
+            idents = [''] * len(devs)
+        for d, ident in zip(devs, idents):
+            key = ('id:' + ident) if ident else d['serial']
+            if key in seen:
                 continue
-            parts = line.split()
-            udid = parts[0]
-            is_panda_tcp = udid.startswith('127.0.0.1:')
-            if is_panda_tcp:
-                panda_udids.add(udid)
-            else:
-                seen_udids.add(udid)
-        if seen_udids:
-            return len(seen_udids)
-        return len(panda_udids) if panda_udids else worker_devices_connected
+            seen.add(key)
+            total += 1
+        _count_cache['ts'] = now
+        _count_cache['value'] = total
+        return total
     except Exception:
         return worker_devices_connected
 
@@ -2147,6 +2574,8 @@ DAILY_STREAM_RETENTION_DAYS = 7
 DAILY_STREAM_WINDOW_START_MIN = 7 * 60        # 07:00
 DAILY_STREAM_WINDOW_END_MIN = 23 * 60 + 30    # 23:30 (incluido)
 _WEEKDAY_NAMES_ES = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
+_MONTH_NAMES_ES = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio",
+                   "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 _daily_stats_lock = threading.Lock()
 
 
@@ -2181,7 +2610,7 @@ def _prune_daily_streams():
 
 
 def _record_daily_stream(app_key, count=1):
-    """Suma streams al dia operativo actual para una app y lo guarda en la BD.
+    """Suma streams al dia y al mes actuales para una app y lo guarda en la BD.
 
     Se llama justo donde el bot cuenta un stream real (Spotify single,
     single-app y multi-app). El guardado es inmediato para que un cierre de la
@@ -2194,6 +2623,7 @@ def _record_daily_stream(app_key, count=1):
         date_str = _daily_stream_date()
         if not date_str:
             return
+        month_str = date_str[:7]
         app_key = app_key or 'spotify'
         with _daily_stats_lock:
             with app.app_context():
@@ -2205,6 +2635,14 @@ def _record_daily_stream(app_key, count=1):
                             db.session.add(row)
                         row.count = int(row.count or 0) + count
                         row.updated_at = datetime.utcnow()
+
+                        mrow = MonthlyStreamStat.query.filter_by(month=month_str, app=app_key).first()
+                        if mrow is None:
+                            mrow = MonthlyStreamStat(month=month_str, app=app_key, count=0)
+                            db.session.add(mrow)
+                        mrow.count = int(mrow.count or 0) + count
+                        mrow.updated_at = datetime.utcnow()
+
                         db.session.commit()
                         break
                     except Exception:
@@ -2265,6 +2703,31 @@ def get_daily_streams():
     best_day = max(result_days, key=lambda d: d["total"]) if active_days else None
     minutes_now = now.hour * 60 + now.minute
 
+    # --- Totales mensuales (tabla monthly_stream_stat, no se borra) ---
+    def _month_payload(month_str):
+        if not month_str:
+            return {"month": "", "label": "", "spotify": 0, "tidal": 0,
+                    "apple_music": 0, "total": 0}
+        rows_m = MonthlyStreamStat.query.filter_by(month=month_str).all()
+        apps_m = {r.app: int(r.count or 0) for r in rows_m}
+        sp = apps_m.get('spotify', 0)
+        td = apps_m.get('tidal', 0)
+        ap = apps_m.get('apple_music', 0)
+        try:
+            y, m = month_str.split('-')
+            label = f"{_MONTH_NAMES_ES[int(m) - 1]} {y}"
+        except Exception:
+            label = month_str
+        return {"month": month_str, "label": label, "spotify": sp, "tidal": td,
+                "apple_music": ap, "total": sp + td + ap}
+
+    month_str = now.strftime("%Y-%m")
+    prev_month_str = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    current_month = _month_payload(month_str)
+    previous_month = _month_payload(prev_month_str)
+    current_month["previous_total"] = previous_month["total"]
+    current_month["delta"] = current_month["total"] - previous_month["total"]
+
     return jsonify({
         "days": result_days,
         "today": result_days[-1] if result_days else None,
@@ -2275,12 +2738,15 @@ def get_daily_streams():
             "active": DAILY_STREAM_WINDOW_START_MIN <= minutes_now <= DAILY_STREAM_WINDOW_END_MIN,
         },
         "retention_days": DAILY_STREAM_RETENTION_DAYS,
+        "month": current_month,
+        "previous_month": previous_month,
         "summary": {
             "week_total": week_total,
             "avg_per_day": round(week_total / days, 1) if days else 0,
             "avg_per_active_day": round(week_total / len(active_days), 1) if active_days else 0,
             "active_days": len(active_days),
             "best_day": best_day,
+            "month_total": current_month["total"],
         },
     })
 
@@ -3868,7 +4334,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.2.5"
+                            "text": "SonicPush STA 5.2.6"
                         }
                     }
                 ],
@@ -10041,6 +10507,8 @@ def _dashboard_np_refresh_worker():
 if __name__ == '__main__':
     _dashboard_worker = threading.Thread(target=_dashboard_np_refresh_worker, daemon=True)
     _dashboard_worker.start()
+    _adb_worker = threading.Thread(target=_adb_heal_worker, daemon=True)
+    _adb_worker.start()
     try:
         app.run(port=8999, debug=False, threaded=True)
     finally:

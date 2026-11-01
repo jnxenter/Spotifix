@@ -683,7 +683,7 @@
 
         .kpi-grid {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
             gap: 16px;
         }
 
@@ -723,6 +723,7 @@
         }
 
         .kpi-card.kpi-today { border-left-color: #2ecc71; }
+        .kpi-card.kpi-month { border-left-color: #f1c40f; }
         .kpi-card.kpi-spotify { border-left-color: #1DB954; }
         .kpi-card.kpi-tidal { border-left-color: #00c2d1; }
         .kpi-card.kpi-apple { border-left-color: #fa2d48; }
@@ -1519,6 +1520,11 @@
                 <div class="kpi-label">Streams hoy</div>
                 <div class="kpi-value" id="kpiTodayValue">--</div>
                 <div class="kpi-sub" id="kpiTodaySub">&nbsp;</div>
+            </div>
+            <div class="kpi-card kpi-month">
+                <div class="kpi-label">Streams este mes</div>
+                <div class="kpi-value" id="kpiMonthValue">--</div>
+                <div class="kpi-sub" id="kpiMonthSub">&nbsp;</div>
             </div>
             <div class="kpi-card">
                 <div class="kpi-label">Total 7 d&iacute;as</div>
