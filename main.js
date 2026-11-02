@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, dialog } = require('electron');
 const { spawn, exec } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -317,18 +317,26 @@ if (!gotTheLock) {
 
 
     async function waitForBackendReady() {
+        const startedAt = Date.now();
+        let timeoutWarned = false;
         while (true) {
             try {
                 console.log('Attempting to check backend readiness...');
                 const response = await axios.post('http://127.0.0.1:8999/backend');
                 if (response.data.ready) {
                     console.log('Backend is ready');
+                    backendFastFailures = 0;
+                    backendErrorDialogOpen = false;
                     break;
                 } else {
                     console.log(`Backend not ready yet, reason: ${response.data.message}. Retrying in 1 second...`);
                 }
             } catch (error) {
                 console.log(`Error checking backend readiness: ${error.message}. Retrying in 1 second...`);
+            }
+            if (!timeoutWarned && Date.now() - startedAt > BACKEND_READY_TIMEOUT_MS) {
+                timeoutWarned = true;
+                showBackendErrorDialog('El backend lleva mas de 60 segundos sin responder.');
             }
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
@@ -401,6 +409,75 @@ if (!gotTheLock) {
         tray.setContextMenu(contextMenu);
     }
 
+    // ---- Diagnostico de arranque del backend ----
+    // Si el backend muere al iniciar (dependencias faltantes, python ausente,
+    // puerto ocupado, etc.) la app se quedaba en "Starting..." para siempre.
+    // Guardamos la salida real y mostramos un dialogo con el error.
+    let backendLogLines = [];
+    let backendLastSpawnAt = 0;
+    let backendFastFailures = 0;
+    let backendErrorDialogOpen = false;
+
+    const BACKEND_FAST_FAIL_MS = 15000;   // muere antes de 15 s = fallo de arranque
+    const BACKEND_MAX_FAST_FAILURES = 3;  // 3 seguidos = no reintentar en bucle
+    const BACKEND_READY_TIMEOUT_MS = 60000;
+
+    function backendLogPath() {
+        try { return path.join(app.getPath('userData'), 'backend.log'); } catch (e) { return null; }
+    }
+
+    function appendBackendLog(text) {
+        const clean = String(text || '').replace(/\s+$/, '');
+        if (!clean) return;
+        for (const line of clean.split(/\r?\n/)) {
+            backendLogLines.push(`[${new Date().toISOString()}] ${line}`);
+        }
+        if (backendLogLines.length > 200) backendLogLines = backendLogLines.slice(-200);
+        const logPath = backendLogPath();
+        if (!logPath) return;
+        try { fs.appendFileSync(logPath, clean + '\n'); } catch (e) {}
+    }
+
+    function backendErrorDetail() {
+        const tail = backendLogLines.slice(-25).join('\n');
+        return tail || '(el backend no produjo ninguna salida)';
+    }
+
+    async function showBackendErrorDialog(reason) {
+        if (backendErrorDialogOpen) return;
+        backendErrorDialogOpen = true;
+        try {
+            if (splashScreen && !splashScreen.isDestroyed()) {
+                splashScreen.webContents.executeJavaScript(
+                    "var el = document.getElementById('backendState'); if (el) { el.textContent = 'Backend no responde'; }"
+                ).catch(() => {});
+            }
+            const result = await dialog.showMessageBox({
+                type: 'error',
+                title: 'SonicPush STA - El backend no arranco',
+                message: 'El backend no pudo iniciar.',
+                detail: reason + '\n\n' + backendErrorDetail() +
+                    '\n\nLog completo: ' + (backendLogPath() || '(no disponible)'),
+                buttons: ['Reintentar', 'Salir'],
+                defaultId: 0,
+                cancelId: 1,
+                noLink: true
+            });
+            if (result.response === 0) {
+                backendFastFailures = 0;
+                backendErrorDialogOpen = false;
+                if (!backendProcess || backendProcess.killed) {
+                    backendProcess = spawnBackend();
+                }
+                return;
+            }
+            app.isQuitting = true;
+            app.quit();
+        } catch (e) {
+            backendErrorDialogOpen = false;
+        }
+    }
+
     function spawnBackend() {
         const apiExePath = path.join(appPath, 'api.exe');
         const apiExePathAlt = path.join(appPath, 'api', 'api.exe');
@@ -418,6 +495,7 @@ if (!gotTheLock) {
                 catch (e) { return false; }
             });
         let proc;
+        backendLastSpawnAt = Date.now();
         if (!preferPy && exeCandidates.length) {
             const exe = exeCandidates[0];
             const cwd = exe === apiExePathAlt ? path.join(appPath, 'api') : appPath;
@@ -433,19 +511,26 @@ if (!gotTheLock) {
         }
 
         proc.stdout.on('data', (data) => {
+            appendBackendLog(data);
             console.log(`[Backend] ${data}`);
         });
 
         proc.stderr.on('data', (data) => {
+            appendBackendLog(data);
             console.error(`[Backend] ${data}`);
         });
 
         proc.on('error', (err) => {
+            const msg = (err && err.message) || String(err);
+            appendBackendLog(`No se pudo lanzar el backend: ${msg}`);
             console.error('Backend process error:', err);
+            showBackendErrorDialog('No se pudo ejecutar el backend: ' + msg);
         });
 
         proc.on('exit', (code, signal) => {
-            console.log(`Backend process exited with code ${code} signal ${signal}`);
+            const lifetime = Date.now() - backendLastSpawnAt;
+            console.log(`Backend process exited with code ${code} signal ${signal} after ${lifetime}ms`);
+            appendBackendLog(`Backend cerrado (code=${code}, signal=${signal}, ${lifetime}ms)`);
             backendProcess = null;
             const restartFlag = path.join(appPath, '_update_restart');
             let isUpdateRestart = false;
@@ -464,6 +549,13 @@ if (!gotTheLock) {
                 return;
             }
             if (!app.isQuitting) {
+                backendFastFailures = lifetime < BACKEND_FAST_FAIL_MS ? backendFastFailures + 1 : 0;
+                if (backendFastFailures >= BACKEND_MAX_FAST_FAILURES) {
+                    showBackendErrorDialog(
+                        `El backend se cerro ${backendFastFailures} veces seguidas al arrancar.`
+                    );
+                    return;
+                }
                 console.log('Restarting backend in 3 seconds...');
                 setTimeout(() => {
                     if (!app.isQuitting) {
@@ -702,6 +794,7 @@ if (!gotTheLock) {
     app.on('ready', async () => {
         const restartFlag = path.join(appPath, '_update_restart');
         try { if (fs.existsSync(restartFlag)) fs.unlinkSync(restartFlag); } catch (e) {}
+        try { fs.writeFileSync(backendLogPath(), ''); } catch (e) {}
         killProcessOnPort(8999);
         backendProcess = spawnBackend();
         spawnAIServer();
