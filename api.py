@@ -347,6 +347,8 @@ config_search_links_perc = 0
 config_streaming_mode_only = False
 
 config_selected_apps = ['spotify']
+config_play_mode = 'multi_sound'
+config_relay_minutes_by_app = {}
 # La configuración que debe usar el temporizador para el inicio total. Nunca se
 # debe elegir por orden de archivos: puede iniciar un perfil distinto al que el
 # usuario dejó seleccionado en la interfaz.
@@ -11347,6 +11349,7 @@ def _start_bot_by_timer():
         global config_webhook_url, config_webhook_interval, config_shuffle_perc
         global config_search_links_perc, config_streaming_mode_only, config_use_clonned_apks, config_validate_proxy
         global config_selected_apps, config_spotify_playtime, config_tidal_playtime, config_apple_playtime
+        global config_play_mode, config_relay_minutes_by_app
         global worker_loaded_spotify_links, worker_loaded_tidal_links, worker_loaded_apple_links
         global worker_loaded_link, worker_loaded_accounts, worker_loaded_proxies
 
@@ -11371,6 +11374,14 @@ def _start_bot_by_timer():
         config_selected_apps = [a for a in raw_apps if a in SUPPORTED_APPS]
         if not config_selected_apps:
             config_selected_apps = ['spotify']
+
+        config_play_mode = str(config_data.get('play_mode', 'multi_sound')).strip().lower() or 'multi_sound'
+        if config_play_mode not in ('multi_sound', 'relay'):
+            config_play_mode = 'multi_sound'
+        raw_relay = config_data.get('relay_minutes_by_app', {})
+        if not isinstance(raw_relay, dict):
+            raw_relay = {}
+        config_relay_minutes_by_app = {str(k).strip(): str(v) for k, v in raw_relay.items()}
 
         config_session_time = config_data.get('session_time') or '8-8'
         config_links_batch_id = config_data.get('links_batch_id')
@@ -11420,7 +11431,19 @@ def _start_bot_by_timer():
         _timer_log(f"Bot iniciando con configuración seleccionada {config_name}, apps: {config_selected_apps}")
         bot_thread = threading.Thread(target=main_function, args=(config_data,))
         bot_thread.start()
-        return True
+        # No confirmar inicio hasta que main_function haya creado al menos un
+        # hilo para teléfono. Evita el falso “iniciado correctamente” si una
+        # configuración inválida o un error temprano mata el hilo principal.
+        deadline = time.time() + 90
+        while time.time() < deadline:
+            if worker_threads:
+                return True
+            if not worker_bot_running:
+                break
+            time.sleep(1)
+        worker_bot_running = False
+        _timer_log('ERROR: el bot no creó hilos de teléfonos; no se inició la reproducción.')
+        return False
     except Exception as e:
         import traceback
         err = traceback.format_exc()
