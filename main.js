@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const axios = require('axios');
 const treeKill = require('tree-kill');
+const { pipeline } = require('stream/promises');
 
 const iconPath = path.join(__dirname, 'assets/icon.ico');
 const isPackaged = app.isPackaged;
@@ -45,6 +46,71 @@ function markAuthenticated() {
     } catch (e) {
         console.error('Failed to save auth state:', e);
     }
+}
+
+function pendingSourceUpdateVersion() {
+    // Las versiones antiguas actualizan main.js/preload.js desde GitHub y
+    // crean esta marca antes de reiniciar. El nuevo main la convierte en una
+    // actualización completa del instalador, sin pedir al usuario que baje un
+    // archivo manualmente.
+    try {
+        const flag = path.join(appPath, '_update_restart');
+        if (!fs.existsSync(flag)) return '';
+        const version = fs.readFileSync(flag, 'utf8').trim();
+        return /^v?\d+(?:\.\d+){1,3}$/.test(version) ? version.replace(/^v/, '') : '';
+    } catch (e) {
+        return '';
+    }
+}
+
+function clearPendingSourceUpdate() {
+    try { fs.unlinkSync(path.join(appPath, '_update_restart')); } catch (e) {}
+}
+
+async function launchVerifiedInstaller(version) {
+    const tag = `v${String(version).replace(/^v/, '')}`;
+    const releaseUrl = `https://api.github.com/repos/jnxenter/Spotifix/releases/tags/${tag}`;
+    const releaseResponse = await axios.get(releaseUrl, {
+        headers: { 'User-Agent': 'SonicPush-Installer-Updater', 'Accept': 'application/vnd.github+json' },
+        timeout: 30000,
+    });
+    const assets = Array.isArray(releaseResponse.data.assets) ? releaseResponse.data.assets : [];
+    const asset = assets.find(item => /\.exe$/i.test(String(item.name || '')));
+    if (!asset || !asset.browser_download_url || !String(asset.digest || '').startsWith('sha256:')) {
+        throw new Error(`La Release ${tag} aún no tiene un instalador verificable.`);
+    }
+    const updatesDir = path.join(app.getPath('temp'), 'SonicPush', 'updates');
+    fs.mkdirSync(updatesDir, { recursive: true });
+    const safeName = String(asset.name).replace(/[^A-Za-z0-9._ -]/g, '_');
+    const installerPath = path.join(updatesDir, safeName);
+    const partialPath = `${installerPath}.part`;
+    const hash = crypto.createHash('sha256');
+    const download = await axios.get(asset.browser_download_url, {
+        responseType: 'stream', timeout: 0,
+        headers: { 'User-Agent': 'SonicPush-Installer-Updater' },
+    });
+    download.data.on('data', chunk => hash.update(chunk));
+    await pipeline(download.data, fs.createWriteStream(partialPath));
+    const actual = hash.digest('hex').toLowerCase();
+    const expected = String(asset.digest).split(':', 2)[1].toLowerCase();
+    if (actual !== expected) {
+        try { fs.unlinkSync(partialPath); } catch (e) {}
+        throw new Error('La verificación SHA-256 del instalador falló.');
+    }
+    fs.renameSync(partialPath, installerPath);
+    const launcherPath = path.join(updatesDir, `_install_${tag}.cmd`);
+    const exeName = 'SonicPush STA.exe';
+    fs.writeFileSync(launcherPath,
+        '@echo off\r\n' +
+        'timeout /t 3 /nobreak >nul\r\n' +
+        `taskkill /f /im "${exeName}" >nul 2>&1\r\n` +
+        `start "" "${installerPath}"\r\n` +
+        'timeout /t 10 /nobreak >nul\r\n' +
+        'del /f /q "%~f0" >nul 2>&1\r\n',
+        'ascii');
+    require('child_process').spawn('cmd', ['/c', launcherPath], {
+        detached: true, stdio: 'ignore', windowsHide: true,
+    }).unref();
 }
 
 
@@ -792,8 +858,23 @@ if (!gotTheLock) {
     });
 
     app.on('ready', async () => {
-        const restartFlag = path.join(appPath, '_update_restart');
-        try { if (fs.existsSync(restartFlag)) fs.unlinkSync(restartFlag); } catch (e) {}
+        const bridgeVersion = pendingSourceUpdateVersion();
+        // Compatibilidad automática: si una versión antigua actualizó sólo los
+        // archivos JS y reinició, este main ya actualizado completa el salto al
+        // instalador binario correcto. No se requiere descarga manual.
+        if (bridgeVersion) {
+            createSplashScreen();
+            try {
+                await launchVerifiedInstaller(bridgeVersion);
+                clearPendingSourceUpdate();
+                setTimeout(() => app.quit(), 400);
+                return;
+            } catch (error) {
+                console.error('Automatic installer bridge failed:', error);
+                clearPendingSourceUpdate();
+                if (splashScreen && !splashScreen.isDestroyed()) splashScreen.close();
+            }
+        }
         try { fs.writeFileSync(backendLogPath(), ''); } catch (e) {}
         killProcessOnPort(8999);
         backendProcess = spawnBackend();
