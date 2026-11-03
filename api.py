@@ -46,6 +46,11 @@ from functools import wraps
 from ConsoleLogger import add_log
 import ConsoleLogger
 import UtilsService
+try:
+    import account_checker
+except Exception as _account_checker_error:  # pragma: no cover
+    account_checker = None
+    print(f"account_checker import failed: {_account_checker_error}")
 import asyncio
 import websockets
 from uiautomator2 import Device
@@ -57,7 +62,7 @@ from time import sleep
 from bs4 import BeautifulSoup
 from fp.fp import FreeProxy
 import adbutils
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 def resource_path(relative_path):
     """ Get the absolute path to the resource, works for both development and packaged executables """
     if hasattr(sys, '_MEIPASS'):
@@ -90,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.2.11"
+Bot_version = "5.3.0"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -243,6 +248,32 @@ class Device(db.Model):
 
     def __repr__(self):
         return f'<Device {self.udid}>'
+
+
+class AccountInfo(db.Model):
+    """Datos de la cuenta de musica leidos desde el propio telefono.
+
+    Una fila por dispositivo y app (spotify/tidal/apple_music). Se actualiza
+    en cada escaneo; no guarda historico para no crecer sin limite.
+    """
+    __tablename__ = 'account_info'
+    id = db.Column(db.Integer, primary_key=True)
+    udid = db.Column(db.String(100), nullable=False, index=True)
+    app = db.Column(db.String(30), nullable=False, default='spotify', index=True)
+    email = db.Column(db.String(255), nullable=True)
+    plan = db.Column(db.String(80), nullable=True)
+    is_premium = db.Column(db.Boolean, default=False)
+    expires_on = db.Column(db.String(20), nullable=True)
+    expires_raw = db.Column(db.String(80), nullable=True)
+    status = db.Column(db.String(40), nullable=True)
+    detail = db.Column(db.String(255), nullable=True)
+    raw_text = db.Column(db.Text, nullable=True)
+    checked_at = db.Column(db.DateTime, nullable=True)
+    __table_args__ = (db.UniqueConstraint('udid', 'app', name='uq_account_info_udid_app'),)
+
+    def __repr__(self):
+        return f'<AccountInfo {self.udid} {self.app} {self.email}>'
+
 
 class Link(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -2062,6 +2093,979 @@ def panda_numbers():
         return jsonify({'error': str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+# Cuentas de musica: correo, plan y vencimiento leidos desde el telefono.
+# El telefono ya tiene la sesion abierta, asi que se navega la UI de Spotify
+# (perfil > ajustes > cuenta) y se lee el texto con uiautomator2. No se usan
+# credenciales ni APIs privadas y NUNCA se cierra la app ni se cambia la cuenta.
+# ---------------------------------------------------------------------------
+
+ACCOUNT_SCAN_INTERVAL_SEC = 6 * 60 * 60
+ACCOUNT_AUTO_SCAN_ENABLED = True
+
+account_scan_lock = threading.Lock()
+account_scan_state = {
+    'running': False,
+    'total': 0,
+    'done': 0,
+    'current': '',
+    'current_num': None,
+    'trigger': '',
+    'started_at': None,
+    'finished_at': None,
+    'errors': [],
+    'message': '',
+}
+_account_auto_thread = None
+
+
+def _acct_norm(text):
+    """Minusculas y sin acentos, para comparar etiquetas de la UI."""
+    txt = str(text or '')
+    if account_checker is not None:
+        try:
+            return account_checker.strip_accents(txt).lower().strip()
+        except Exception:
+            pass
+    return txt.lower().strip()
+
+
+def _acct_join(texts):
+    return ' '.join(_acct_norm(t) for t in (texts or []))
+
+
+def _acct_has(texts, words):
+    joined = _acct_join(texts)
+    return any(w in joined for w in words)
+
+
+def _acct_activity(d):
+    try:
+        cur = d.app_current() or {}
+        return str(cur.get('package') or ''), str(cur.get('activity') or '')
+    except Exception:
+        return '', ''
+
+
+def _acct_dump(d):
+    """Devuelve (textos_visibles, xml) del pantallazo actual."""
+    try:
+        xml = d.dump_hierarchy()
+    except Exception:
+        return [], ''
+    texts = []
+    if account_checker is not None:
+        try:
+            texts = account_checker.extract_texts(xml)
+        except Exception:
+            texts = []
+    return texts, xml
+
+
+def _acct_nodes(xml):
+    """Nodos con texto/desc y su centro, para pulsar por coordenadas."""
+    nodes = []
+    if not xml:
+        return nodes
+    try:
+        from xml.etree import ElementTree as ET
+        root = ET.fromstring(xml)
+    except Exception:
+        return nodes
+    for node in root.iter('node'):
+        try:
+            bounds = node.attrib.get('bounds') or ''
+            m = re.match(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]', bounds)
+            if not m:
+                continue
+            x1, y1, x2, y2 = (int(m.group(i)) for i in range(1, 5))
+            nodes.append({
+                'rid': str(node.attrib.get('resource-id') or ''),
+                'text': str(node.attrib.get('text') or ''),
+                'desc': str(node.attrib.get('content-desc') or ''),
+                'cx': (x1 + x2) // 2,
+                'cy': (y1 + y2) // 2,
+            })
+        except Exception:
+            continue
+    return nodes
+
+
+def _acct_click_node(d, node):
+    try:
+        if node.get('cx') is not None and node.get('cy') is not None:
+            d.click(node['cx'], node['cy'])
+            return True
+    except Exception:
+        pass
+    for key in ('text', 'desc'):
+        val = node.get(key) or ''
+        if val:
+            try:
+                if d(text=val).click_exists(0.3):
+                    return True
+            except Exception:
+                pass
+    return False
+
+
+def _acct_tap(d, xml, texts=(), descs=(), resource_ids=(), allow_contains=True):
+    """Pulsa el primer nodo que coincida: id > texto exacto > contiene > desc.
+
+    `allow_contains=False` obliga a que el texto coincida completo; se usa
+    para "Cuenta", porque el menu lateral tambien contiene "Añadir cuenta".
+    """
+    nodes = _acct_nodes(xml)
+    if not nodes:
+        return False
+
+    for rid in resource_ids:
+        for node in nodes:
+            if node['rid'] == rid:
+                if _acct_click_node(d, node):
+                    return True
+
+    wanted = [_acct_norm(t) for t in texts if t]
+    for wanted_text in wanted:
+        for node in nodes:
+            if _acct_norm(node['text']) == wanted_text:
+                if _acct_click_node(d, node):
+                    return True
+
+    if allow_contains:
+        for wanted_text in wanted:
+            for node in nodes:
+                if wanted_text and wanted_text in _acct_norm(node['text']):
+                    if _acct_click_node(d, node):
+                        return True
+
+    for wanted_desc in [_acct_norm(x) for x in descs if x]:
+        for node in nodes:
+            if wanted_desc and wanted_desc in _acct_norm(node['desc']):
+                if _acct_click_node(d, node):
+                    return True
+    return False
+
+
+def _acct_wait_tap(d, texts=(), descs=(), resource_ids=(), allow_contains=True, timeout=60):
+    """Espera una UI variable y pulsa el control cuando realmente aparezca.
+
+    Los telefonos pueden tardar distinto segun proxy/red; no se asume que una
+    vista haya terminado de cargar despues de un sleep fijo.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        _texts, xml = _acct_dump(d)
+        if _acct_tap(d, xml, texts, descs, resource_ids, allow_contains):
+            return True
+        sleep(1.2)
+    return False
+
+
+def _acct_is_account_page(texts):
+    """True si el texto parece la pagina de cuenta (no solo ajustes)."""
+    joined = _acct_join(texts)
+    if '@' in joined:
+        return True
+    markers = (
+        'tu plan', 'your plan', 'plan actual', 'current plan',
+        'proximo pago', 'proximo cobro', 'next payment', 'next billing',
+        'payment date', 'fecha de pago', 'se renueva', 'renews on',
+        'free plan', 'plan free', 'premium individual', 'premium duo',
+        'premium family', 'premium familiar', 'premium student',
+    )
+    return any(m in joined for m in markers)
+
+
+def _acct_return_home(d):
+    """Vuelve a la pantalla principal sin cerrar Spotify.
+
+    No basta con mirar la actividad: Ajustes y la pagina de cuenta tambien
+    viven dentro de MainActivity. Se cierran el navegador, la pagina de
+    cuenta, Ajustes y el menu lateral hasta ver la barra inferior de Spotify.
+    """
+    deep_labels = {
+        'cuenta', 'configuracion', 'settings', 'configuracion y privacidad', 'settings and privacy',
+        'cerrar sesion', 'informacion de la cuenta', 'correo electronico',
+        'facturacion', 'tu plan',
+        # Menu Perfil abierto (tambien es MainActivity).
+        'ver perfil', 'anadir cuenta', 'tu premium', 'your premium',
+    }
+    for _ in range(8):
+        pkg, _act = _acct_activity(d)
+        if pkg and pkg != 'com.spotify.music':
+            low_pkg = pkg.lower()
+            if any(k in low_pkg for k in ('chrome', 'browser', 'firefox', 'webview', 'tabs')):
+                try:
+                    # En Chrome Custom Tab Back durante la carga puede ir a
+                    # una pagina intermedia y dejarla abierta. El boton de
+                    # cerrar la pestaña vuelve directamente a Spotify.
+                    closed = False
+                    for label in ('Cerrar pestaña', 'Close tab', 'Close'):
+                        try:
+                            if d(description=label).click_exists(0.4):
+                                closed = True
+                                break
+                        except Exception:
+                            pass
+                    if not closed:
+                        d.press('back')
+                except Exception:
+                    return
+                sleep(1.5)
+                continue
+            return
+        if not pkg:
+            return
+        try:
+            texts, _xml = _acct_dump(d)
+        except Exception:
+            texts = []
+        labels = {_acct_norm(t) for t in texts if t}
+        joined = _acct_join(texts)
+        at_home = ('inicio, pestana' in joined or 'home, tab' in joined
+                   or 'tu biblioteca' in joined)
+        if at_home and not (labels & deep_labels):
+            return
+        if not (labels & deep_labels) and not at_home:
+            # Otra pantalla de Spotify (busqueda, album...): ya no hay nada
+            # que cerrar de la pagina de cuenta.
+            return
+        try:
+            d.press('back')
+        except Exception:
+            return
+        sleep(1.2)
+
+
+def _scan_spotify_account(udid):
+    """Abre la pagina de cuenta de Spotify y devuelve (datos, texto_crudo)."""
+    d = ua.connect(udid)
+    sleep(1)
+    try:
+        d.app_info('com.spotify.music')
+    except Exception:
+        return {
+            'status': 'not_installed',
+            'detail': 'Spotify no esta instalado en este telefono.',
+        }, ''
+
+    pkg, act = _acct_activity(d)
+    if pkg != 'com.spotify.music':
+        try:
+            d.app_start('com.spotify.music', '.MainActivity')
+        except Exception as exc:
+            return {'status': 'error', 'detail': f'No se pudo abrir Spotify: {exc}'}, ''
+        sleep(6)
+        pkg, act = _acct_activity(d)
+
+    if 'login' in (act or '').lower():
+        return {
+            'status': 'not_logged_in',
+            'detail': 'Spotify no tiene una sesion iniciada en este telefono.',
+        }, ''
+
+    _acct_return_home(d)
+    sleep(1)
+    base_texts, base_xml = _acct_dump(d)
+
+    # El tab "Premium" solo existe en cuentas Free: sirve para no confundir
+    # el aviso de upgrade con un plan Premium real.
+    hint_free = False
+    try:
+        version = get_device_spotify_version(udid)
+        if d(resourceId=spotify_ui('com.spotify.music', version, 'premium_tab')).exists(timeout=1):
+            hint_free = True
+        elif d(descriptionContains='Premium, Tab').exists(timeout=1):
+            hint_free = True
+    except Exception:
+        pass
+
+    # 1) Abrir el menu del avatar.
+    _acct_tap(
+        d, base_xml,
+        [],
+        ['ir al perfil y a la configuracion', 'go to profile and settings'],
+        ['com.spotify.music:id/faceheader'],
+    )
+    sleep(2)
+    menu_texts, menu_xml = _acct_dump(d)
+
+    # 2) Pasar siempre por Ajustes. No se usa _acct_has('cuenta'): el drawer
+    # trae "Añadir cuenta", que no es la fila de Cuenta de ajustes.
+    _acct_tap(
+        d, menu_xml,
+        ['Configuracion y privacidad', 'Configuración y privacidad',
+         'Settings and privacy'],
+        ['settings and privacy', 'configuracion y privacidad'],
+        allow_contains=False,
+    )
+    sleep(2)
+    menu_texts, menu_xml = _acct_dump(d)
+
+    clicked_account = _acct_tap(
+        d, menu_xml, ['Cuenta', 'Account'],
+        allow_contains=False,
+    )
+
+    page_texts = []
+    opened_external = False
+    if clicked_account:
+        deadline = time.time() + 30
+        while time.time() < deadline:
+            sleep(2)
+            texts_now, _xml_now = _acct_dump(d)
+            pkg_now, _act_now = _acct_activity(d)
+            if pkg_now and pkg_now != 'com.spotify.music':
+                opened_external = True
+                # La cuenta tambien puede abrirse en el navegador: se lee
+                # igual y luego se vuelve a Spotify sin cerrar nada.
+                sleep(3)
+                page_texts, _ = _acct_dump(d)
+                break
+            page_texts = texts_now
+            if _acct_is_account_page(texts_now):
+                sleep(2)
+                page_texts, _ = _acct_dump(d)
+                break
+
+    # 3) La pagina interna muestra correo y plan. La expiracion de la prueba
+    # se lee sin salir de Spotify: Perfil > Tu Premium. No se abre navegador.
+    premium_texts = []
+    if clicked_account and page_texts and account_checker is not None:
+        preliminary = account_checker.parse_account_texts(
+            page_texts, hint_free=hint_free,
+        )
+        if preliminary.get('is_premium') and not preliminary.get('expires_on'):
+            _acct_return_home(d)
+            sleep(1.5)
+            _home_texts, home_xml = _acct_dump(d)
+            _acct_tap(
+                d, home_xml, [],
+                ['ir al perfil y a la configuracion', 'go to profile and settings'],
+                ['com.spotify.music:id/faceheader'],
+            )
+            sleep(2)
+            drawer_texts, drawer_xml = _acct_dump(d)
+            clicked_premium = _acct_tap(
+                d, drawer_xml, ['Tu Premium', 'Your Premium'],
+                ['tu premium', 'your premium'], allow_contains=False,
+            )
+            if clicked_premium:
+                deadline = time.time() + 15
+                while time.time() < deadline:
+                    sleep(1.5)
+                    texts_now, _xml_now = _acct_dump(d)
+                    premium_texts = texts_now or premium_texts
+                    if _acct_has(texts_now, (
+                        'termina', 'finaliza', 'vence', 'vencimiento',
+                        'ends', 'expires', 'renew', 'renueva', 'proxima factura',
+                    )):
+                        break
+
+    # El correo que tenga guardado la app sirve de respaldo si la pagina de
+    # cuenta no lo muestra; el plan que se lea en el telefono manda.
+    email_hint = ''
+    type_hint = ''
+    try:
+        with app.app_context():
+            dev = Device.query.filter_by(udid=udid).first()
+            if dev is not None:
+                bind = (dev.bindedAccount or '').strip()
+                if '@' in bind:
+                    email_hint = bind.split(':')[0].strip()
+                type_hint = (dev.accountType or '').strip()
+    except Exception:
+        pass
+
+    if account_checker is not None:
+        source_texts = ((page_texts or []) + (premium_texts or [])) or (menu_texts + base_texts)
+        result = account_checker.parse_account_texts(
+            source_texts,
+            hint_free=hint_free,
+            fallback_email=email_hint,
+            account_type_hint=type_hint,
+        )
+    else:
+        result = {
+            'email': '', 'plan': '', 'is_premium': False,
+            'expires_on': None, 'expires_raw': '',
+            'status': 'unknown',
+            'detail': 'Falta account_checker.py en la instalacion.',
+        }
+
+    if not clicked_account:
+        result['status'] = 'unknown'
+        result['detail'] = 'No se encontro la opcion Cuenta en Spotify.'
+    elif not page_texts and not result.get('email') and not result.get('plan'):
+        if opened_external:
+            result['detail'] = 'La pagina de cuenta se abrio en el navegador, no dentro de Spotify.'
+        else:
+            result['detail'] = 'No se pudo leer la pagina de cuenta de Spotify.'
+    elif opened_external and not result.get('email') and not result.get('plan'):
+        result['detail'] = 'La pagina de cuenta se abrio fuera de Spotify y no mostro los datos.'
+
+    raw_text = '\n'.join((page_texts or []) + (premium_texts or []) or menu_texts or base_texts)
+    try:
+        _acct_return_home(d)
+    except Exception:
+        pass
+    return result, raw_text
+
+
+def _account_result_from_plan(texts, plan='', is_premium=False, detail=''):
+    """Resultado comun para Tidal/Apple Music usando los textos visibles."""
+    email = ''
+    if account_checker is not None:
+        try:
+            email = account_checker.parse_account_texts(texts).get('email') or ''
+        except Exception:
+            pass
+    status = 'ok' if is_premium else 'free'
+    return {
+        'email': email,
+        'plan': plan,
+        'is_premium': bool(is_premium),
+        'expires_on': None,
+        'expires_raw': '',
+        'status': status,
+        'detail': detail or ('Premium activo.' if is_premium else 'Cuenta Free (sin suscripcion activa).'),
+    }
+
+
+def _scan_tidal_account(udid):
+    """Lee Perfil > Settings > Manage account en Tidal sin cerrar sesion."""
+    pkg = 'com.aspiro.tidal'
+    d = ua.connect(udid)
+    try:
+        d.app_info(pkg)
+    except Exception:
+        return {'status': 'not_installed', 'detail': 'Tidal no esta instalado en este telefono.'}, ''
+    try:
+        d.app_start(pkg, 'com.aspiro.wamp.LoginFragmentActivity')
+        sleep(4)
+    except Exception as exc:
+        return {'status': 'error', 'detail': f'No se pudo abrir Tidal: {exc}'}, ''
+    home_texts, home_xml = _acct_dump(d)
+    if _acct_has(home_texts, ('iniciar sesion', 'log in', 'sign in')):
+        return {'status': 'not_logged_in', 'detail': 'Tidal no tiene una sesion iniciada.'}, ''
+    _acct_tap(d, home_xml, [], ['settings', 'configuracion', 'configuración'], ['SettingsButton'])
+    sleep(2)
+    settings_texts, settings_xml = _acct_dump(d)
+    if not _acct_tap(d, settings_xml, ['Manage account', 'Administrar cuenta', 'Gestionar cuenta'], allow_contains=False):
+        return {'status': 'unknown', 'detail': 'No se encontro Administrar cuenta en Tidal.'}, '\n'.join(settings_texts)
+    sleep(2)
+    texts, _xml = _acct_dump(d)
+    joined = _acct_join(texts)
+    # Una cuenta Premium muestra "Current plan" seguido del nombre del plan;
+    # una Free no muestra esa fila y conserva las opciones de cuenta.
+    plan = ''
+    for i, text in enumerate(texts):
+        if _acct_norm(text) in ('current plan', 'plan actual', 'plan vigente') and i + 1 < len(texts):
+            plan = texts[i + 1].strip()
+            break
+    premium = bool(plan) and not any(x in _acct_norm(plan) for x in ('free', 'gratis'))
+    result = _account_result_from_plan(
+        texts, plan or 'Free', premium,
+        f'Tidal: {plan}' if premium else 'Tidal Free (sin plan activo).',
+    )
+    try:
+        d.press('back')
+        sleep(1)
+        d.press('back')
+    except Exception:
+        pass
+    return result, '\n'.join(texts)
+
+
+def _scan_apple_music_account(udid):
+    """Lee Mas opciones > Cuenta de Apple Music sin cambiar sesion."""
+    pkg = 'com.apple.android.music'
+    d = ua.connect(udid)
+    try:
+        d.app_info(pkg)
+    except Exception:
+        return {'status': 'not_installed', 'detail': 'Apple Music no esta instalado en este telefono.'}, ''
+    try:
+        d.app_start(pkg)
+        sleep(4)
+    except Exception as exc:
+        return {'status': 'error', 'detail': f'No se pudo abrir Apple Music: {exc}'}, ''
+    home_texts, home_xml = _acct_dump(d)
+    if _acct_has(home_texts, ('iniciar sesion', 'sign in')):
+        return {'status': 'not_logged_in', 'detail': 'Apple Music no tiene una sesion iniciada.'}, ''
+    if not _acct_wait_tap(d, [], ['mas opciones', 'more options'], timeout=60):
+        return {'status': 'unknown', 'detail': 'Apple Music no termino de cargar el menu de cuenta.'}, '\n'.join(home_texts)
+    sleep(0.8)
+    menu_texts, menu_xml = _acct_dump(d)
+    if not _acct_wait_tap(d, ['Cuenta', 'Account'], allow_contains=False, timeout=60):
+        return {'status': 'unknown', 'detail': 'No se encontro Cuenta en Apple Music.'}, '\n'.join(menu_texts)
+    # Esperar hasta que cargue la seccion Suscripcion, no solo la cabecera.
+    texts, account_xml = [], ''
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        sleep(1.2)
+        texts, account_xml = _acct_dump(d)
+        joined_now = _acct_join(texts)
+        if any(k in joined_now for k in (
+            'gestionar suscripcion', 'manage subscription',
+            'suscribirse ahora', 'subscribe now',
+        )):
+            break
+    # En Premium, se abre primero "Gestionar suscripcion" mientras aun es
+    # visible. Despues se vuelve a Cuenta y se baja para leer el correo.
+    # Esto evita que una variacion de scroll oculte el boton antes de usarlo.
+    initial_joined = _acct_join(texts)
+    premium = ('gestionar suscripcion' in initial_joined
+               or 'manage subscription' in initial_joined)
+    if premium:
+        if _acct_wait_tap(d, ['Gestionar suscripción', 'Manage subscription'], allow_contains=False, timeout=60):
+            # Esta vista carga los datos de StoreKit de forma asincrona; no
+            # se acepta el primer dump si solo contiene "Cargando/Loading".
+            deadline = time.time() + 60
+            while time.time() < deadline:
+                sleep(1.5)
+                subscription_texts, _ = _acct_dump(d)
+                texts = texts + [t for t in subscription_texts if t not in texts]
+                if _acct_has(subscription_texts, (
+                    'se renueva', 'renovacion', 'renews', 'renewal',
+                    'expires', 'vence', 'ends',
+                )):
+                    break
+            try:
+                d.press('back')
+                sleep(1.5)
+            except Exception:
+                pass
+    # El correo queda al final de la pagina de cuenta; se recoge sin pulsar
+    # Suscribirse ahora ni ninguna accion de compra.
+    try:
+        d.swipe(540, 1600, 540, 700, duration=0.35)
+        sleep(1)
+        lower_texts, _ = _acct_dump(d)
+        texts = texts + [t for t in lower_texts if t not in texts]
+    except Exception:
+        pass
+    joined = _acct_join(texts)
+    premium = premium or 'gestionar suscripcion' in joined or 'manage subscription' in joined
+    free = ('suscribirse ahora' in joined or 'subscribe now' in joined
+            or 'start listening' in joined)
+    result = _account_result_from_plan(
+        texts, 'Premium' if premium else 'Free' if free else '', premium,
+        'Apple Music: suscripcion activa.' if premium else 'Apple Music Free (sin suscripcion activa).' if free else 'No se pudo determinar la suscripcion de Apple Music.',
+    )
+    if premium and account_checker is not None:
+        try:
+            # La pantalla de StoreKit solo dice "Individual" y la fecha,
+            # no repite "Premium". El plan ya se confirmo al entrar aqui.
+            parsed = account_checker.parse_account_texts(texts, account_type_hint='Premium')
+            if parsed.get('expires_on'):
+                result['expires_on'] = parsed['expires_on']
+                result['expires_raw'] = parsed.get('expires_raw') or ''
+                days = (datetime.strptime(parsed['expires_on'], '%Y-%m-%d').date() - datetime.now().date()).days
+                result['detail'] = f'Apple Music: renueva en {days} dia(s).'
+        except Exception:
+            pass
+    if not premium and not free:
+        result['status'] = 'unknown'
+    try:
+        d.press('back')
+        sleep(0.7)
+        d.press('back')
+    except Exception:
+        pass
+    return result, '\n'.join(texts)
+
+
+def _save_account_result(udid, data, raw_text='', app_key='spotify'):
+    with app.app_context():
+        row = AccountInfo.query.filter_by(udid=udid, app=app_key).first()
+        if row is None:
+            row = AccountInfo(udid=udid, app=app_key)
+            db.session.add(row)
+        # Algunas vistas de suscripcion (Apple StoreKit) no repiten el correo.
+        # Conservamos el ya validado salvo que la app informe cierre de sesion.
+        next_email = (data.get('email') or '')[:255]
+        if next_email or (data.get('status') or '') == 'not_logged_in' or row is None:
+            row.email = next_email
+        row.plan = (data.get('plan') or '')[:80]
+        row.is_premium = bool(data.get('is_premium'))
+        row.expires_on = (data.get('expires_on') or '')[:20] or None
+        row.expires_raw = (data.get('expires_raw') or '')[:80] or None
+        row.status = (data.get('status') or 'unknown')[:40]
+        row.detail = (data.get('detail') or '')[:255]
+        row.raw_text = (raw_text or '')[:8000]
+        row.checked_at = datetime.utcnow()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
+
+
+def _panda_number_map():
+    """serial -> {num, model} con la numeracion que muestra Panda."""
+    result = {}
+    try:
+        import sqlite3 as sqlite3_mod
+        db_path = os.path.join(os.path.expandvars('%APPDATA%'), '6WPTMA9HZO', 'device.db')
+        if not os.path.exists(db_path):
+            return result
+        conn = sqlite3_mod.connect(db_path)
+        rows = conn.execute(
+            "SELECT onlySerial, sort, name FROM device WHERE userDelete=0"
+        ).fetchall()
+        conn.close()
+        for serial, num, name in rows:
+            try:
+                result[str(serial)] = {'num': int(num), 'model': str(name or '')}
+            except (ValueError, TypeError):
+                continue
+    except Exception as exc:
+        add_log('WARN', 'accounts', f'panda map: {exc}')
+    return result
+
+
+_android_id_cache = {}
+
+
+def _device_android_id(udid, ttl_seconds=3600):
+    """android_id del equipo: identifica duplicados del mismo telefono en ADB."""
+    serial = str(udid or '')
+    if not serial:
+        return ''
+    now = time.time()
+    cached = _android_id_cache.get(serial)
+    if cached is not None and (now - cached[0]) < ttl_seconds:
+        return cached[1]
+    aid = ''
+    try:
+        with _adb_sem:
+            result = subprocess.run(
+                [adb_path, '-s', serial, 'shell', 'settings', 'get', 'secure', 'android_id'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                timeout=12, startupinfo=startupinfo
+            )
+        value = (result.stdout or '').strip()
+        if re.match(r'^[0-9a-fA-F]{8,32}$', value):
+            aid = value.lower()
+    except Exception:
+        aid = ''
+    _android_id_cache[serial] = (now, aid)
+    return aid
+
+
+def _auth_online_serials(panda_map=None):
+    """Seriales conectados, sin duplicados y priorizando el numero de Panda.
+
+    En MuMu el mismo telefono aparece dos veces en ADB (`emulator-5556` y
+    `127.0.0.1:16416`). Se deduplica por android_id y se conserva el serial
+    que Panda usa para numerar, para que el panel no muestre filas repetidas.
+    """
+    try:
+        rows = [d for d in _adb_devices_raw() if d.get('state') == 'device']
+    except Exception:
+        return []
+    panda_map = panda_map if panda_map is not None else _panda_number_map()
+
+    def _rank(device):
+        serial = device.get('serial') or ''
+        num = (panda_map.get(serial) or {}).get('num')
+        return (
+            0 if serial in panda_map else 1,
+            1 if device.get('is_local_mirror') else 0,
+            num if isinstance(num, int) and num > 0 else 10 ** 9,
+            serial,
+        )
+
+    rows.sort(key=_rank)
+    result = []
+    seen = set()
+    for device in rows:
+        serial = device.get('serial') or ''
+        if not serial:
+            continue
+        aid = _device_android_id(serial)
+        key = ('aid:' + aid) if aid else ('serial:' + serial)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(serial)
+    return result
+
+
+def _canonical_serial(serial, online):
+    """Devuelve el serial canonico (el que conoce Panda) para un equipo."""
+    serial = str(serial or '')
+    if not serial:
+        return ''
+    online = list(online or [])
+    if serial in online:
+        return serial
+    aid = _device_android_id(serial)
+    if not aid:
+        return ''
+    for candidate in online:
+        if _device_android_id(candidate) == aid:
+            return candidate
+    return ''
+
+
+def _account_row_to_dict(row, panda_map=None, online=None):
+    panda_map = panda_map or {}
+    online = online or set()
+    panda = panda_map.get(row.udid, {})
+    checked_at = row.checked_at.isoformat() + 'Z' if row.checked_at else None
+    days_left = None
+    if row.expires_on:
+        try:
+            exp = datetime.strptime(row.expires_on, '%Y-%m-%d').date()
+            days_left = (exp - datetime.now().date()).days
+        except Exception:
+            days_left = None
+    return {
+        'udid': row.udid,
+        'app': row.app,
+        'panda_num': panda.get('num'),
+        'model': panda.get('model') or '',
+        'online': row.udid in online,
+        'email': row.email or '',
+        'plan': row.plan or '',
+        'is_premium': bool(row.is_premium),
+        'expires_on': row.expires_on or '',
+        'expires_raw': row.expires_raw or '',
+        'days_left': days_left,
+        'status': row.status or 'unknown',
+        'detail': row.detail or '',
+        'checked_at': checked_at,
+    }
+
+
+def _start_account_scan(udids=None, trigger='manual', force=False, app_key='spotify'):
+    app_key = app_key if app_key in ('spotify', 'tidal', 'apple_music') else 'spotify'
+    with account_scan_lock:
+        if account_scan_state.get('running'):
+            return False, 'Ya hay un escaneo de cuentas en curso.'
+        account_scan_state.update({
+            'running': True,
+            'total': 0,
+            'done': 0,
+            'current': '',
+            'current_num': None,
+            'trigger': trigger,
+            'app': app_key,
+            'started_at': datetime.utcnow().isoformat() + 'Z',
+            'finished_at': None,
+            'errors': [],
+            'message': 'Preparando escaneo...',
+        })
+    thread = threading.Thread(
+        target=_account_scan_worker,
+        args=(list(udids) if udids else None, bool(force), app_key),
+        daemon=True,
+        name='account-scan',
+    )
+    thread.start()
+    return True, 'Escaneo iniciado.'
+
+
+def _account_scan_worker(udids, force, app_key='spotify'):
+    errors = []
+    try:
+        online = _auth_online_serials()
+        if udids:
+            targets = []
+            for udid in udids:
+                canonical = _canonical_serial(udid, online)
+                if canonical and canonical not in targets:
+                    targets.append(canonical)
+        elif app_key in ('tidal', 'apple_music'):
+            # Estas apps pueden estar instaladas en todos los equipos sin que
+            # todos tengan cuenta. Despues del primer descubrimiento se
+            # revisan solo las cuentas reales ya encontradas, evitando esperar
+            # hasta 60 s por cada telefono sin sesion.
+            with app.app_context():
+                known_rows = AccountInfo.query.filter(
+                    AccountInfo.app == app_key,
+                    AccountInfo.status.in_(('ok', 'free', 'premium_no_date')),
+                ).all()
+            targets = []
+            for row in known_rows:
+                canonical = _canonical_serial(row.udid, online)
+                if canonical and canonical not in targets:
+                    targets.append(canonical)
+            if not targets:
+                targets = list(online)
+        else:
+            targets = list(online)
+    except Exception as exc:
+        targets = []
+        errors.append(f'No se pudo listar ADB: {exc}')
+
+    with account_scan_lock:
+        account_scan_state['total'] = len(targets)
+        account_scan_state['message'] = f'0/{len(targets)} telefonos'
+
+    if not force and bot_running_now():
+        errors.append('El bot esta en ejecucion: escaneo detenido.')
+        targets = []
+
+    scanners = {
+        'spotify': _scan_spotify_account,
+        'tidal': _scan_tidal_account,
+        'apple_music': _scan_apple_music_account,
+    }
+
+    def _scan_one(udid, idx):
+        try:
+            panda = _panda_number_map().get(udid, {})
+            num = panda.get('num')
+        except Exception:
+            num = None
+        with account_scan_lock:
+            account_scan_state['current'] = udid
+            account_scan_state['current_num'] = num
+            account_scan_state['message'] = f'Revisando {num or udid} ({idx}/{len(targets)}) · paralelo'
+        try:
+            data, raw_text = scanners.get(app_key, _scan_spotify_account)(udid)
+            _save_account_result(udid, data, raw_text, app_key)
+            return ''
+        except Exception as exc:
+            add_log('WARN', 'accounts', f'{udid}: {exc}')
+            try:
+                _save_account_result(udid, {
+                    'status': 'error',
+                    'detail': f'Error al revisar la cuenta: {str(exc)[:180]}',
+                }, app_key=app_key)
+            except Exception:
+                pass
+            return f'{udid}: {exc}'
+
+    # Cinco ADB/telefonos independientes en paralelo: reduce el tiempo total
+    # y cada uno conserva su propio proxy y ritmo de carga.
+    if targets:
+        with ThreadPoolExecutor(max_workers=min(5, len(targets)), thread_name_prefix='account-check') as pool:
+            futures = {
+                pool.submit(_scan_one, udid, idx): udid
+                for idx, udid in enumerate(targets, 1)
+            }
+            done_count = 0
+            for future in as_completed(futures):
+                done_count += 1
+                try:
+                    error = future.result()
+                    if error:
+                        errors.append(error)
+                except Exception as exc:
+                    errors.append(f'{futures[future]}: {exc}')
+                with account_scan_lock:
+                    account_scan_state['done'] = done_count
+                    account_scan_state['errors'] = list(errors)
+                    account_scan_state['message'] = f'{done_count}/{len(targets)} telefonos revisados (5 en paralelo)'
+
+    with account_scan_lock:
+        account_scan_state['running'] = False
+        account_scan_state['current'] = ''
+        account_scan_state['current_num'] = None
+        account_scan_state['finished_at'] = datetime.utcnow().isoformat() + 'Z'
+        account_scan_state['errors'] = list(errors)
+        if errors:
+            account_scan_state['message'] = f'Escaneo terminado con {len(errors)} aviso(s).'
+        else:
+            account_scan_state['message'] = f'Escaneo terminado ({account_scan_state["done"]} telefonos).'
+
+
+def _accounts_auto_scan_loop():
+    """Cada 6 h, solo con el bot detenido y si la pestana tiene datos viejos."""
+    sleep(90)
+    while True:
+        try:
+            if ACCOUNT_AUTO_SCAN_ENABLED and not bot_running_now():
+                last = None
+                with app.app_context():
+                    last = db.session.query(db.func.max(AccountInfo.checked_at)).scalar()
+                due = last is None or (datetime.utcnow() - last).total_seconds() >= ACCOUNT_SCAN_INTERVAL_SEC
+                if due:
+                    started, _msg = _start_account_scan(trigger='auto')
+                    if started:
+                        add_log('INFO', 'accounts', 'Escaneo automatico de cuentas iniciado.')
+        except Exception as exc:
+            add_log('WARN', 'accounts', f'auto-scan: {exc}')
+        sleep(600)
+
+
+@app.route('/accounts/list', methods=['GET'])
+@require_token
+def accounts_list():
+    app_key = (request.args.get('app') or 'spotify').strip()
+    panda_map = _panda_number_map()
+    online = set(_auth_online_serials(panda_map))
+    try:
+        rows = AccountInfo.query.filter_by(app=app_key).all()
+    except Exception as exc:
+        return jsonify({'success': False, 'error': str(exc), 'accounts': []}), 500
+
+    accounts = [_account_row_to_dict(row, panda_map, online) for row in rows]
+    accounts.sort(key=lambda a: (
+        a['panda_num'] is None,
+        a['panda_num'] if a['panda_num'] is not None else 10 ** 9,
+        a['udid'],
+    ))
+    summary = {
+        'total': len(accounts),
+        'premium': sum(1 for a in accounts if a['is_premium']),
+        'free': sum(1 for a in accounts if a['status'] == 'free'),
+        'no_session': sum(1 for a in accounts if a['status'] == 'not_logged_in'),
+        'no_data': sum(1 for a in accounts if a['status'] in ('unknown', 'error', 'not_installed')),
+        'expiring_soon': sum(
+            1 for a in accounts
+            if a['is_premium'] and a['days_left'] is not None and 0 <= a['days_left'] <= 7
+        ),
+    }
+    with account_scan_lock:
+        scan = dict(account_scan_state)
+    return jsonify({
+        'success': True,
+        'app': app_key,
+        'accounts': accounts,
+        'summary': summary,
+        'scan': scan,
+        'auto_scan_hours': ACCOUNT_SCAN_INTERVAL_SEC // 3600,
+    })
+
+
+@app.route('/accounts/scan', methods=['POST'])
+@require_token
+def accounts_scan():
+    data = request.get_json(silent=True) or {}
+    app_key = str(data.get('app') or 'spotify').strip()
+    if app_key not in ('spotify', 'tidal', 'apple_music'):
+        return jsonify({'success': False, 'error': 'app no soportada.'}), 400
+    udids = data.get('udids')
+    if isinstance(udids, str):
+        udids = [udids]
+    if udids is not None and not isinstance(udids, list):
+        return jsonify({'success': False, 'error': 'udids debe ser una lista.'}), 400
+    started, message = _start_account_scan(
+        udids=udids,
+        trigger=str(data.get('trigger') or 'manual'),
+        force=bool(data.get('force')),
+        app_key=app_key,
+    )
+    with account_scan_lock:
+        scan = dict(account_scan_state)
+    status = 200 if started else 409
+    return jsonify({'success': started, 'message': message, 'scan': scan}), status
+
+
+@app.route('/accounts/status', methods=['GET'])
+@require_token
+def accounts_status():
+    with account_scan_lock:
+        scan = dict(account_scan_state)
+    return jsonify({'success': True, 'scan': scan})
+
+
 @app.route('/device_android_versions', methods=['GET'])
 @require_token
 def device_android_versions():
@@ -2318,7 +3322,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.2.11 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.0 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -4468,7 +5472,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.2.11"
+                            "text": "SonicPush STA 5.3.0"
                         }
                     }
                 ],
@@ -4709,6 +5713,17 @@ def initialize():
 
 
 initialize()
+
+
+# Escaneo automatico de cuentas (cada 6 h, solo con el bot detenido).
+try:
+    if ACCOUNT_AUTO_SCAN_ENABLED and _account_auto_thread is None:
+        _account_auto_thread = threading.Thread(
+            target=_accounts_auto_scan_loop, daemon=True, name='account-auto-scan'
+        )
+        _account_auto_thread.start()
+except Exception as _account_auto_error:
+    print(f"account auto-scan thread not started: {_account_auto_error}")
 
 
 
@@ -9738,6 +10753,10 @@ _TIMER_GRACE_MIN = 60
 # se ejecuta una vez y se desactiva. La UI la prende/apaga con el botón
 # "Repetición diaria".
 _timer_repeat_daily = True
+# Al detener el bot por temporizador se revisan las cuentas de Spotify. Los
+# resultados ya viven en AccountInfo, por lo que permanecen visibles todo el
+# dia hasta el siguiente chequeo.
+_timer_account_check_on_stop = True
 
 
 def _timer_cfg_path():
@@ -9764,6 +10783,7 @@ def _save_timer_config():
             }
         ser["timezone"] = _per_app_timers["all"].get("timezone", "America/Mexico_City")
         ser["repeat_daily"] = bool(_timer_repeat_daily)
+        ser["account_check_on_stop"] = bool(_timer_account_check_on_stop)
         p = _timer_cfg_path()
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, 'w', encoding='utf-8') as f:
@@ -9791,8 +10811,9 @@ def _load_timer_config():
             t["start_triggered"] = False
         if "timezone" in ser:
             _per_app_timers["all"]["timezone"] = ser["timezone"]
-        global _timer_repeat_daily
+        global _timer_repeat_daily, _timer_account_check_on_stop
         _timer_repeat_daily = bool(ser.get("repeat_daily", True))
+        _timer_account_check_on_stop = bool(ser.get("account_check_on_stop", True))
     except Exception:
         pass
 
@@ -9976,10 +10997,38 @@ def _timer_mark_passed_today(t, action):
         t[action + "_last_date"] = ""
 
 
+def _start_timer_account_check():
+    """Revisa Spotify, Tidal y Apple Music tras la parada total.
+
+    Se ejecutan una tras otra porque el estado de escaneo es compartido; cada
+    app conserva su resultado en la pestaña Cuentas hasta el proximo ciclo.
+    Dentro de cada app los telefonos se revisan en paralelo.
+    """
+    if not _timer_account_check_on_stop:
+        return
+    labels = {'spotify': 'Spotify', 'tidal': 'Tidal', 'apple_music': 'Apple Music'}
+    for app_key in ('spotify', 'tidal', 'apple_music'):
+        started, message = _start_account_scan(trigger='timer-stop', force=True, app_key=app_key)
+        if not started:
+            _timer_log(f'Revisión {labels[app_key]} al detener: {message}')
+            continue
+        _timer_log(f'Revisión {labels[app_key]} al detener: iniciada')
+        # Esperar a que esta app termine antes de pedir la siguiente.
+        deadline = time.time() + 15 * 60
+        while time.time() < deadline:
+            sleep(2)
+            with account_scan_lock:
+                running = bool(account_scan_state.get('running'))
+            if not running:
+                break
+        if running:
+            _timer_log(f'Revisión {labels[app_key]} al detener: excedió el tiempo de espera')
+
+
 @app.route('/get_timer', methods=['GET'])
 @require_token
 def get_timer():
-    result = {"timers": {}, "timezone": _per_app_timers["all"].get("timezone", "America/Mexico_City"), "paused_apps": list(worker_app_paused), "log": _timer_log_entries[-30:], "repeat_daily": bool(_timer_repeat_daily)}
+    result = {"timers": {}, "timezone": _per_app_timers["all"].get("timezone", "America/Mexico_City"), "paused_apps": list(worker_app_paused), "log": _timer_log_entries[-30:], "repeat_daily": bool(_timer_repeat_daily), "account_check_on_stop": bool(_timer_account_check_on_stop)}
     for ak in ['all', 'spotify', 'tidal', 'apple']:
         t = _per_app_timers[ak]
         result["timers"][ak] = {
@@ -9989,6 +11038,17 @@ def get_timer():
             "repeat_daily": bool(_timer_repeat_daily),
         }
     return jsonify(result)
+
+
+@app.route('/set_timer_account_check', methods=['POST'])
+@require_token
+def set_timer_account_check():
+    global _timer_account_check_on_stop
+    data = request.json or {}
+    _timer_account_check_on_stop = bool(data.get('enabled', not _timer_account_check_on_stop))
+    _save_timer_config()
+    _timer_log('Revisión de cuentas al detener ' + ('ACTIVADA' if _timer_account_check_on_stop else 'APAGADA'))
+    return jsonify({'success': True, 'enabled': _timer_account_check_on_stop})
 
 
 @app.route('/set_timer', methods=['POST'])
@@ -10244,6 +11304,11 @@ def _timer_check_thread():
                         try:
                             _stop_bot()
                             _timer_log("Bot detenido correctamente")
+                            # Tras parar a las 11 PM, leer las cuentas en
+                            # paralelo. El resultado persiste en Cuentas hasta
+                            # la siguiente verificacion.
+                            threading.Thread(target=_start_timer_account_check, daemon=True,
+                                             name='timer-account-check').start()
                         except Exception as e:
                             _timer_log(f"Error al detener bot: {e}")
                     else:
@@ -10393,7 +11458,7 @@ def check_update():
 
 CORE_FILES_TO_UPDATE = [
     'api.py', 'renderer.js', 'index.html', 'login.html',
-    'main.js', 'preload.js', 'package.json',
+    'main.js', 'preload.js', 'package.json', 'account_checker.py',
 ]
 AUX_FILES_TO_UPDATE = [
     'apk/SoundAssistant.apk', 'apk/SoundAssistant_1.3.5.14.1.apk',

@@ -1,5 +1,6 @@
 document.addEventListener('DOMContentLoaded', () => {
     let authToken = null;  // Declare authToken at the top
+    let accountsLoop = null;  // Auto-refresco de la pestana Cuentas
 
     // Function to wait for the token
     function waitForToken() {
@@ -1249,7 +1250,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 analyticsBtn: 'analytics',
                 settingsBtn: 'settings',
                 chatBtn: 'chat',
-                timerBtn: 'timer'
+                timerBtn: 'timer',
+                accountsBtn: 'accounts'
             };
 
             Object.keys(sidebarButtons).forEach(buttonId => {
@@ -1259,6 +1261,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     button.addEventListener('click', () => showTab(tabName));
                 }
             });
+
+            const accountsScanButton = document.getElementById('accountsScanBtn');
+            if (accountsScanButton) {
+                accountsScanButton.addEventListener('click', startAccountsScan);
+            }
+            const accountsAppSelect = document.getElementById('accountsAppSelect');
+            if (accountsAppSelect) {
+                accountsAppSelect.addEventListener('change', () => loadAccounts());
+            }
 
             // ---- IA Chat ----
             const chatMessages = document.getElementById('chatMessages');
@@ -1430,6 +1441,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 var _timerFirstLoad = true;
                 var _timerRepeatDaily = false;
+                var _timerAccountCheckOnStop = true;
 
                 function renderRepeatState(repeat) {
                     _timerRepeatDaily = !!repeat;
@@ -1445,12 +1457,22 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
 
+                function renderTimerAccountCheck(enabled) {
+                    _timerAccountCheckOnStop = !!enabled;
+                    var btn = document.getElementById('timerAccountsCheckToggle');
+                    if (btn) {
+                        btn.textContent = 'Revisión de cuentas al detener: ' + (_timerAccountCheckOnStop ? 'ACTIVADA' : 'APAGADA');
+                        btn.style.background = _timerAccountCheckOnStop ? '#1a1a1a' : '#e74c3c';
+                    }
+                }
+
                 function loadTimerState() {
                     fetch('http://localhost:8999/get_timer', { headers: { 'Authorization': 'Bearer ' + authToken } })
                     .then(r => r.json())
                     .then(d => {
                         if (d.timezone) tzSelect.value = d.timezone;
                         renderRepeatState(d.repeat_daily);
+                        renderTimerAccountCheck(d.account_check_on_stop);
                         var apps = d.timers || {};
                         ['all', 'spotify', 'tidal', 'apple'].forEach(ak => {
                             var info = apps[ak] || {};
@@ -1563,6 +1585,26 @@ document.addEventListener('DOMContentLoaded', () => {
                             repeatToggleBtn.textContent = prevText;
                         })
                         .finally(() => { repeatToggleBtn.disabled = false; });
+                    });
+                }
+
+                var accountsCheckToggleBtn = document.getElementById('timerAccountsCheckToggle');
+                if (accountsCheckToggleBtn) {
+                    accountsCheckToggleBtn.addEventListener('click', () => {
+                        accountsCheckToggleBtn.disabled = true;
+                        fetch('http://localhost:8999/set_timer_account_check', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
+                            body: JSON.stringify({ enabled: !_timerAccountCheckOnStop })
+                        })
+                        .then(r => r.json())
+                        .then(d => {
+                            if (!d.success) throw new Error(d.error || 'Error');
+                            renderTimerAccountCheck(d.enabled);
+                            loadTimerState();
+                        })
+                        .catch(e => alert('No se pudo cambiar la revisión de cuentas: ' + (e.message || e)))
+                        .finally(() => { accountsCheckToggleBtn.disabled = false; });
                     });
                 }
 
@@ -1696,6 +1738,186 @@ document.addEventListener('DOMContentLoaded', () => {
                     startAnalyticsLoop();
                 } else {
                     stopAnalyticsLoop();
+                }
+                if (tabName === 'accounts') {
+                    loadAccounts();
+                    startAccountsLoop();
+                } else {
+                    stopAccountsLoop();
+                }
+            }
+
+            // ---- Cuentas Spotify ----
+            function accountsEsc(value) {
+                return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                }[c]));
+            }
+
+            function accountsFmtDate(value) {
+                if (!value) return '—';
+                let d;
+                if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+                    const parts = value.split('-').map(Number);
+                    d = new Date(parts[0], parts[1] - 1, parts[2]);
+                } else {
+                    d = new Date(value);
+                }
+                if (isNaN(d.getTime())) return value;
+                return d.toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' });
+            }
+
+            function accountsFmtDateTime(value) {
+                if (!value) return '—';
+                const d = new Date(value);
+                if (isNaN(d.getTime())) return value;
+                return d.toLocaleString('es-MX', {
+                    day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
+                });
+            }
+
+            function accountsStatusInfo(account) {
+                const status = account.status || 'unknown';
+                if (account.is_premium && account.days_left != null && account.days_left <= 7) {
+                    return { label: account.days_left < 0 ? 'Vencida' : `Vence en ${account.days_left} día(s)`, cls: account.days_left < 0 ? 'err' : 'warn' };
+                }
+                if (status === 'ok') return { label: 'Premium', cls: 'ok' };
+                if (status === 'premium_no_date') return { label: 'Premium (sin fecha)', cls: 'warn' };
+                if (status === 'free') return { label: 'Free', cls: 'free' };
+                if (status === 'not_logged_in') return { label: 'Sin sesión', cls: 'err' };
+                if (status === 'not_installed') return { label: 'Sin app', cls: 'err' };
+                if (status === 'payment_issue') return { label: 'Pago pendiente', cls: 'err' };
+                if (status === 'in_use') return { label: 'En uso', cls: 'warn' };
+                if (status === 'error') return { label: 'Error', cls: 'err' };
+                return { label: 'Sin datos', cls: 'free' };
+            }
+
+            function renderAccounts(data) {
+                const body = document.getElementById('accountsTableBody');
+                const summary = document.getElementById('accountsSummary');
+                const statusEl = document.getElementById('accountsScanStatus');
+                const scanBtn = document.getElementById('accountsScanBtn');
+                if (!body) return;
+
+                const accounts = (data && data.accounts) || [];
+                const sum = (data && data.summary) || {};
+                const scan = (data && data.scan) || {};
+
+                if (summary) {
+                    summary.innerHTML = [
+                        `<span class="accounts-chip">Total <b>${sum.total || 0}</b></span>`,
+                        `<span class="accounts-chip">Premium <b>${sum.premium || 0}</b></span>`,
+                        `<span class="accounts-chip">Free <b>${sum.free || 0}</b></span>`,
+                        `<span class="accounts-chip">Sin sesión <b>${sum.no_session || 0}</b></span>`,
+                        `<span class="accounts-chip">Vencen ≤ 7 días <b>${sum.expiring_soon || 0}</b></span>`
+                    ].join('');
+                }
+
+                if (statusEl) {
+                    if (scan.running) {
+                        statusEl.textContent = scan.message || 'Revisando...';
+                    } else if (scan.finished_at) {
+                        statusEl.textContent = 'Última revisión: ' + accountsFmtDateTime(scan.finished_at);
+                    } else {
+                        statusEl.textContent = '';
+                    }
+                }
+                if (scanBtn) {
+                    scanBtn.disabled = !!scan.running;
+                    scanBtn.textContent = scan.running ? 'Revisando...' : 'Revisar ahora';
+                }
+
+                if (!accounts.length) {
+                    body.innerHTML = '<tr><td colspan="7" style="text-align:center; color:#777; padding:24px;">Aún no hay cuentas revisadas. Pulsa “Revisar ahora”.</td></tr>';
+                    return;
+                }
+
+                body.innerHTML = accounts.map(a => {
+                    const st = accountsStatusInfo(a);
+                    const num = a.panda_num != null ? '#' + a.panda_num : '—';
+                    const online = a.online ? '' : ' · desconectado';
+                    const model = a.model
+                        ? `${accountsEsc(a.model)}<div class="accounts-sub">${accountsEsc(a.udid)}${online}</div>`
+                        : `${accountsEsc(a.udid)}<div class="accounts-sub">${online.replace(' · ', '')}</div>`;
+
+                    let expires = '—';
+                    if (a.expires_on) {
+                        expires = accountsFmtDate(a.expires_on);
+                        if (a.days_left != null) {
+                            const tone = a.days_left < 0 ? '#ff8080' : (a.days_left <= 7 ? '#ffcc66' : '#cfcfcf');
+                            const txt = a.days_left < 0 ? 'vencida' : `en ${a.days_left} día(s)`;
+                            expires += `<div class="accounts-sub" style="color:${tone};">${txt}</div>`;
+                        }
+                    }
+
+                    return `<tr title="${accountsEsc(a.detail || '')}">
+                        <td>${num}</td>
+                        <td>${model || '—'}</td>
+                        <td>${accountsEsc(a.email || '—')}</td>
+                        <td>${accountsEsc(a.plan || '—')}</td>
+                        <td>${expires}</td>
+                        <td><span class="accounts-badge ${st.cls}">${st.label}</span></td>
+                        <td>${accountsFmtDateTime(a.checked_at)}</td>
+                    </tr>`;
+                }).join('');
+            }
+
+            async function loadAccounts() {
+                try {
+                    const appSelect = document.getElementById('accountsAppSelect');
+                    const appKey = appSelect ? appSelect.value : 'spotify';
+                    const appNames = { spotify: 'Spotify', tidal: 'Tidal', apple_music: 'Apple Music' };
+                    const appName = appNames[appKey] || appKey;
+                    const title = document.getElementById('accountsTitle');
+                    const description = document.getElementById('accountsDescription');
+                    if (title) title.textContent = 'Cuentas ' + appName;
+                    if (description) description.textContent = `Correo, plan y vencimiento leídos desde ${appName}. Se actualiza solo cada 6 horas.`;
+                    const res = await fetch('http://localhost:8999/accounts/list?app=' + encodeURIComponent(appKey), {
+                        headers: { 'Authorization': `Bearer ${authToken}` }
+                    });
+                    const data = await res.json();
+                    if (!data.success) throw new Error(data.error || 'Error del backend');
+                    renderAccounts(data);
+                } catch (err) {
+                    const statusEl = document.getElementById('accountsScanStatus');
+                    if (statusEl) statusEl.textContent = 'No se pudo cargar: ' + (err.message || err);
+                }
+            }
+
+            async function startAccountsScan() {
+                const statusEl = document.getElementById('accountsScanStatus');
+                const scanBtn = document.getElementById('accountsScanBtn');
+                if (scanBtn) scanBtn.disabled = true;
+                try {
+                    const res = await fetch('http://localhost:8999/accounts/scan', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${authToken}`
+                        },
+                        body: JSON.stringify({
+                            app: (document.getElementById('accountsAppSelect') || {}).value || 'spotify'
+                        })
+                    });
+                    const data = await res.json();
+                    if (!data.success && statusEl) {
+                        statusEl.textContent = data.error || data.message || 'No se pudo iniciar.';
+                    }
+                    await loadAccounts();
+                } catch (err) {
+                    if (statusEl) statusEl.textContent = 'No se pudo iniciar: ' + (err.message || err);
+                }
+            }
+
+            function startAccountsLoop() {
+                if (accountsLoop) clearInterval(accountsLoop);
+                accountsLoop = setInterval(loadAccounts, 8000);
+            }
+
+            function stopAccountsLoop() {
+                if (accountsLoop) {
+                    clearInterval(accountsLoop);
+                    accountsLoop = null;
                 }
             }
 

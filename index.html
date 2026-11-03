@@ -129,6 +129,28 @@
             padding: 0;
             width: 100%;
             flex-grow: 1;
+            min-height: 0;          /* permite que el menú haga scroll */
+            overflow-y: auto;
+            overflow-x: hidden;
+            padding-right: 6px;
+        }
+
+        /* Barra desplazadora visible del menú lateral */
+        #sidebar ul::-webkit-scrollbar {
+            width: 7px;
+        }
+
+        #sidebar ul::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        #sidebar ul::-webkit-scrollbar-thumb {
+            background: #4a4a4a;
+            border-radius: 4px;
+        }
+
+        #sidebar ul::-webkit-scrollbar-thumb:hover {
+            background: #6d6d6d;
         }
 
         #sidebar li {
@@ -322,6 +344,58 @@
 
         tbody tr:last-child td:last-child {
             border-bottom-right-radius: 8px;
+        }
+
+        /* ---- Pestana Cuentas ---- */
+        #accountsTableWrap {
+            overflow-x: auto;
+            margin-bottom: 4px;
+        }
+
+        #accountsTable th,
+        #accountsTable td {
+            white-space: nowrap;
+            font-size: 13px;
+        }
+
+        #accountsTable tbody tr:hover td {
+            background-color: #232323;
+        }
+
+        .accounts-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 13px;
+            border-radius: 999px;
+            font-size: 12px;
+            color: #cfcfcf;
+            background: #151515;
+            border: 1px solid #333;
+        }
+
+        .accounts-chip b {
+            color: #fff;
+            font-size: 14px;
+        }
+
+        .accounts-badge {
+            display: inline-block;
+            padding: 3px 9px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .accounts-badge.ok { background: #12351f; color: #5ee08a; }
+        .accounts-badge.free { background: #2b2b2b; color: #cccccc; }
+        .accounts-badge.warn { background: #3a2d12; color: #ffcc66; }
+        .accounts-badge.err { background: #3a1414; color: #ff8080; }
+
+        .accounts-sub {
+            color: #777;
+            font-size: 11px;
         }
 
         select, button[type="button"], input[type="file"] {
@@ -1135,6 +1209,7 @@
         <li><button id="settingsBtn">Settings</button></li>
         <li><button id="chatBtn">IA</button></li>
         <li><button id="timerBtn">Temporizador</button></li>
+        <li><button id="accountsBtn">Cuentas</button></li>
     </ul>
 </div>
 <div id="main-content">
@@ -1724,6 +1799,7 @@
             </p>
             <div style="margin-top: 12px;">
                 <button id="timerRepeatToggle" class="boton-elegante" style="padding: 10px 16px; background: #e74c3c;">Apagar repetición diaria</button>
+                <button id="timerAccountsCheckToggle" class="boton-elegante" style="padding: 10px 16px; margin-left:8px; background:#1a1a1a;">Revisión de cuentas al detener: ACTIVADA</button>
             </div>
             <p style="margin: 10px 0 0; font-size: 12px; color: #888;">
                 Si la PC estaba apagada u ocupada a la hora exacta, la acción se ejecuta igual al volver
@@ -1867,6 +1943,50 @@
             <div id="timerLog" style="max-height: 400px; overflow-y: auto; font-size: 13px; color: #ccc; padding: 10px; background: #1a1a2e; border-radius: 6px; min-height: 100px;">
                 <p style="color: #666;">Sin eventos de temporizador.</p>
             </div>
+        </div>
+    </div>
+    <div id="accounts" class="content-tab-scrollable">
+        <div class="card" style="margin-bottom: 20px;">
+            <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:15px; flex-wrap:wrap; margin-bottom:16px;">
+                <div>
+                    <h2 id="accountsTitle" style="margin:0;">Cuentas Spotify</h2>
+                    <p id="accountsDescription" style="color:#888; font-size:13px; margin:6px 0 0;">
+                        Correo, plan y vencimiento leídos desde cada teléfono. Se actualiza solo cada 6 horas.
+                    </p>
+                </div>
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <select id="accountsAppSelect" class="boton-elegante" style="width:auto; margin:0;">
+                        <option value="spotify">Spotify</option>
+                        <option value="tidal">Tidal</option>
+                        <option value="apple_music">Apple Music</option>
+                    </select>
+                    <button id="accountsScanBtn" class="boton-elegante" style="width:auto; margin:0;">Revisar ahora</button>
+                    <span id="accountsScanStatus" style="font-size:12px; color:#999;"></span>
+                </div>
+            </div>
+            <div id="accountsSummary" style="display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px;"></div>
+            <div id="accountsTableWrap">
+                <table id="accountsTable">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Teléfono</th>
+                            <th>Correo</th>
+                            <th>Plan</th>
+                            <th>Vence</th>
+                            <th>Estado</th>
+                            <th>Última revisión</th>
+                        </tr>
+                    </thead>
+                    <tbody id="accountsTableBody">
+                        <tr><td colspan="7" style="text-align:center; color:#777; padding:24px;">Cargando cuentas...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p style="color:#666; font-size:12px; margin-top:14px; margin-bottom:0;">
+                El escaneo abre la página de cuenta dentro de la app y vuelve a la pantalla principal. No cierra la app ni cambia la sesión.
+                El automático solo corre con el bot detenido.
+            </p>
         </div>
     </div>
 </div>
