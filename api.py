@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.9"
+Bot_version = "5.3.10"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -3451,7 +3451,7 @@ def start_stop_bot():
             _stop_bot()
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.9 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.10 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -9390,7 +9390,7 @@ def _multi_app_start_all(selected_apps_keys, udid, binded_account, binded_proxy,
     link_info_by_app = {}
 
     for app_key in shuffled_apps:
-        if stop_flags.get(f"{udid}_{app_key}") or stop_flags.get(udid):
+        if _stop_requested(udid) or stop_flags.get(f"{udid}_{app_key}"):
             break
         if app_key in worker_app_paused:
             add_log("INFO", udid, f"[MultiApp] {SUPPORTED_APPS[app_key]['display_name']} is paused (timer), skipping launch")
@@ -9406,6 +9406,8 @@ def _multi_app_start_all(selected_apps_keys, udid, binded_account, binded_proxy,
 
         ui_lock.acquire()
         try:
+            if _stop_requested(udid):
+                break
             d = ua.connect(udid)
             ensure_screen_on(d)
             d.set_input_ime(True)
@@ -11525,13 +11527,9 @@ def _stop_bot():
         # Marcarlo antes de esperar: main_function puede estar todavía
         # preparando el siguiente teléfono y no debe crear nuevos workers.
         worker_bot_running = False
-        main_thread = bot_main_thread
-        if main_thread and main_thread.is_alive() and main_thread is not threading.current_thread():
-            main_thread.join(timeout=20)
-        for thread_info in list(worker_threads.values()):
-            thread = thread_info.get("thread")
-            if thread and thread.is_alive():
-                thread.join(timeout=45)
+        # No esperar hilos aquí: algunos están dentro de automatizaciones UI
+        # largas. Primero hay que silenciar físicamente todos los teléfonos.
+        threads_to_join = list(worker_threads.values())
         worker_threads.clear()
         worker_app_paused.clear()
         proxy_blocked_devices.clear()
@@ -11587,6 +11585,30 @@ def _stop_bot():
                         except Exception as e:
                             _timer_log(f"Error en cierre paralelo: {e}")
             _timer_log(f"Apps cerradas estrictamente en {len(udids)} dispositivos ({closed_total} paquetes): Spotify, Tidal, Apple Music")
+
+            # Dar una ventana breve para que los workers observen stop_flags,
+            # sin convertir la parada en una espera de minutos. Después se da
+            # una última pasada de cierre por si una acción UI estaba en vuelo.
+            main_thread = bot_main_thread
+            if main_thread and main_thread.is_alive() and main_thread is not threading.current_thread():
+                main_thread.join(timeout=2)
+            with ThreadPoolExecutor(max_workers=min(8, max(1, len(threads_to_join))), thread_name_prefix='timer-join') as pool:
+                joins = [pool.submit(info.get('thread').join, 2)
+                         for info in threads_to_join
+                         if info.get('thread') and info.get('thread').is_alive()]
+                for future in as_completed(joins):
+                    try:
+                        future.result()
+                    except Exception:
+                        pass
+            if udids:
+                with ThreadPoolExecutor(max_workers=min(8, len(udids)), thread_name_prefix='timer-stop-final') as pool:
+                    for future in as_completed([pool.submit(_close_device_apps, udid) for udid in udids]):
+                        try:
+                            closed_total += future.result()
+                        except Exception as e:
+                            _timer_log(f"Error en cierre final: {e}")
+            _timer_log(f"Parada final confirmada en {len(udids)} dispositivos ({closed_total} cierres)")
         except Exception as e:
             _timer_log(f"Error cerrando apps: {e}")
     except Exception as e:
