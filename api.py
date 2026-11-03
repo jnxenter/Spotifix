@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.7"
+Bot_version = "5.3.8"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -3480,7 +3480,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.7 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.8 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -11195,6 +11195,22 @@ def _start_timer_account_check():
         if running:
             _timer_log(f'Revisión {labels[app_key]} al detener: excedió el tiempo de espera')
 
+    # El escáner abre las aplicaciones para leer los datos de la cuenta. Al
+    # terminar, volver a cerrarlas para que una PARADA deje los teléfonos tal
+    # como estaban, sin una app de música visible ni un proceso de reproducción.
+    try:
+        result = subprocess.run([adb_path, 'devices', '-l'], stdout=subprocess.PIPE,
+                                text=True, startupinfo=startupinfo)
+        for line in result.stdout.strip().split('\n')[1:]:
+            if '\tdevice' not in line and '   device ' not in line:
+                continue
+            udid = line.split()[0]
+            for app_key in ('spotify', 'tidal', 'apple_music'):
+                _force_close_app_pkgs(udid, app_key)
+        _timer_log('Revisión al detener finalizada; aplicaciones de música cerradas')
+    except Exception as e:
+        _timer_log(f'Error cerrando apps después de la revisión: {e}')
+
 
 @app.route('/get_timer', methods=['GET'])
 @require_token
@@ -11557,8 +11573,9 @@ def _stop_bot():
             # per app on every device, force-stop each one, reinforce with a media
             # PAUSE and WAKEUP, and retry on failure so no device keeps playing.
             apps_meta = [('spotify', 'com.spotify.music'), ('tidal', 'com.aspiro.tidal'), ('apple_music', 'com.apple.android.music')]
-            closed_total = 0
-            for udid in udids:
+            def _close_device_apps(udid):
+                """Cierra las apps de un teléfono; se ejecuta en paralelo."""
+                count = 0
                 for app_key, _base in apps_meta:
                     try:
                         pkgs = _installed_pkgs_for_app(udid, app_key)
@@ -11566,7 +11583,7 @@ def _stop_bot():
                             pkgs = [_base]
                         for pkg in pkgs:
                             _strict_force_stop(udid, pkg)
-                            closed_total += 1
+                            count += 1
                     except Exception as e:
                         _timer_log(f"Error cerrando {app_key} en {udid}: {e}")
                 try:
@@ -11577,6 +11594,19 @@ def _stop_bot():
                     _adb_shell(udid, 'input keyevent KEYCODE_WAKEUP')
                 except Exception:
                     pass
+                return count
+
+            # Antes se procesaban los teléfonos uno por uno y una parada podía
+            # tardar más de un minuto. Cada teléfono es independiente; limitar
+            # la concurrencia protege ADB y deja la parada efectiva en segundos.
+            closed_total = 0
+            if udids:
+                with ThreadPoolExecutor(max_workers=min(8, len(udids)), thread_name_prefix='timer-stop') as pool:
+                    for future in as_completed([pool.submit(_close_device_apps, udid) for udid in udids]):
+                        try:
+                            closed_total += future.result()
+                        except Exception as e:
+                            _timer_log(f"Error en cierre paralelo: {e}")
             _timer_log(f"Apps cerradas estrictamente en {len(udids)} dispositivos ({closed_total} paquetes): Spotify, Tidal, Apple Music")
         except Exception as e:
             _timer_log(f"Error cerrando apps: {e}")
