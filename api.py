@@ -11625,8 +11625,8 @@ def _download_release_installer(remote_version):
         '@echo off\r\n'
         'timeout /t 3 /nobreak >nul\r\n'
         f'taskkill /f /im "{exe_name}" >nul 2>&1\r\n'
-        f'start "" "{final_path}"\r\n'
-        'timeout /t 10 /nobreak >nul\r\n'
+        f'start "" /wait "{final_path}" /S\r\n'
+        f'if exist "{os.path.join(os.path.dirname(_bundle_app_dir()), exe_name)}" start "" "{os.path.join(os.path.dirname(_bundle_app_dir()), exe_name)}"\r\n'
         f'del /f /q "%~f0" >nul 2>&1\r\n'
     )
     with open(launcher_path, 'w', encoding='ascii', newline='') as launcher_file:

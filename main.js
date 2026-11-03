@@ -104,8 +104,8 @@ async function launchVerifiedInstaller(version) {
         '@echo off\r\n' +
         'timeout /t 3 /nobreak >nul\r\n' +
         `taskkill /f /im "${exeName}" >nul 2>&1\r\n` +
-        `start "" "${installerPath}"\r\n` +
-        'timeout /t 10 /nobreak >nul\r\n' +
+        `start "" /wait "${installerPath}" /S\r\n` +
+        `if exist "${process.execPath}" start "" "${process.execPath}"\r\n` +
         'del /f /q "%~f0" >nul 2>&1\r\n',
         'ascii');
     require('child_process').spawn('cmd', ['/c', launcherPath], {
