@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.6"
+Bot_version = "5.3.7"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -3451,7 +3451,9 @@ def start_stop_bot():
             for udid in list(stop_flags.keys()):
                 stop_flags[udid] = True
 
-            for thread_info in worker_threads.values():
+            # main_function puede estar agregando hilos mientras se pulsa Stop.
+            # Tomar una copia evita "dictionary changed size during iteration".
+            for thread_info in list(worker_threads.values()):
                 thread = thread_info.get("thread")
                 if thread and thread.is_alive():
                     thread.join(timeout=45)
@@ -3478,7 +3480,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.6 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.7 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -11529,7 +11531,7 @@ def _stop_bot():
         for thread_number in list(worker_threads.keys()):
             stop_flags[thread_number] = True
         stop_flags['all'] = True
-        for thread_info in worker_threads.values():
+        for thread_info in list(worker_threads.values()):
             thread = thread_info.get("thread")
             if thread and thread.is_alive():
                 thread.join(timeout=45)
