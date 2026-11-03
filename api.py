@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.10"
+Bot_version = "5.3.11"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -3451,7 +3451,7 @@ def start_stop_bot():
             _stop_bot()
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.10 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.11 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -10501,6 +10501,11 @@ def main_function(config_data):
             if 'spotify' in installed_selected:
                 add_log("WARN", udid, f"[MultiApp] No real MultiSound detected on this device; running Spotify only ({installed_selected} -> ['spotify'])")
                 installed_selected = ['spotify']
+
+        # La parada puede llegar durante la detección de apps/proxy de este
+        # teléfono. No registrar ni iniciar un worker tardío después del Stop.
+        if not worker_bot_running or _stop_requested(udid):
+            break
 
         if len(installed_selected) > 1:
             if config_play_mode == 'relay':
