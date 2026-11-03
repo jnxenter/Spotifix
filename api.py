@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.0"
+Bot_version = "5.3.1"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -2262,6 +2262,39 @@ def _acct_wait_tap(d, texts=(), descs=(), resource_ids=(), allow_contains=True, 
     return False
 
 
+def _spotify_force_home(d, timeout=30):
+    """Lleva Spotify a Inicio antes de navegar al perfil.
+
+    Los equipos pueden quedar en Buscar, una canción o una pantalla de carga.
+    La barra inferior sí permanece disponible en esas variantes, por lo que
+    se usa como ancla antes de buscar el avatar.
+    """
+    deadline = time.time() + timeout
+    tapped_home = False
+    while time.time() < deadline:
+        texts, xml = _acct_dump(d)
+        # Descripciones reales ES/EN de la barra inferior de Spotify.
+        if not tapped_home:
+            tapped_home = _acct_tap(
+                d, xml, ['Inicio', 'Home'],
+                ['inicio, pestana', 'inicio, pestaña', 'home, tab'],
+                allow_contains=True,
+            )
+            if tapped_home:
+                sleep(1.5)
+                continue
+        nodes = _acct_nodes(xml)
+        if any(n.get('rid') in (
+                'com.spotify.music:id/faceheader',
+                'com.spotify.music:id/faceheader_image',
+            ) or 'perfil y a la configuracion' in _acct_norm(n.get('desc'))
+               or 'profile and settings' in _acct_norm(n.get('desc'))
+               for n in nodes):
+            return True
+        sleep(1.2)
+    return False
+
+
 def _acct_is_account_page(texts):
     """True si el texto parece la pagina de cuenta (no solo ajustes)."""
     joined = _acct_join(texts)
@@ -2366,6 +2399,9 @@ def _scan_spotify_account(udid):
         }, ''
 
     _acct_return_home(d)
+    # No asumir que Spotify ya estaba en Inicio: puede haberse quedado en
+    # Buscar o reproduciendo una canción en otro telefono.
+    _spotify_force_home(d, timeout=35)
     sleep(1)
     base_texts, base_xml = _acct_dump(d)
 
@@ -2382,30 +2418,41 @@ def _scan_spotify_account(udid):
         pass
 
     # 1) Abrir el menu del avatar.
-    _acct_tap(
-        d, base_xml,
+    opened_profile = _acct_wait_tap(
+        d,
         [],
         ['ir al perfil y a la configuracion', 'go to profile and settings'],
-        ['com.spotify.music:id/faceheader'],
+        ['com.spotify.music:id/faceheader', 'com.spotify.music:id/faceheader_image'],
+        timeout=35,
     )
-    sleep(2)
+    if not opened_profile:
+        # Una segunda pulsacion de Inicio cubre variantes que cargan el avatar
+        # despues de la barra inferior.
+        _spotify_force_home(d, timeout=20)
+        opened_profile = _acct_wait_tap(
+            d, [],
+            ['ir al perfil y a la configuracion', 'go to profile and settings'],
+            ['com.spotify.music:id/faceheader', 'com.spotify.music:id/faceheader_image'],
+            timeout=20,
+        )
+    sleep(1.5)
     menu_texts, menu_xml = _acct_dump(d)
 
     # 2) Pasar siempre por Ajustes. No se usa _acct_has('cuenta'): el drawer
     # trae "Añadir cuenta", que no es la fila de Cuenta de ajustes.
-    _acct_tap(
-        d, menu_xml,
+    _acct_wait_tap(
+        d,
         ['Configuracion y privacidad', 'Configuración y privacidad',
          'Settings and privacy'],
         ['settings and privacy', 'configuracion y privacidad'],
         allow_contains=False,
+        timeout=35,
     )
-    sleep(2)
+    sleep(1.5)
     menu_texts, menu_xml = _acct_dump(d)
 
-    clicked_account = _acct_tap(
-        d, menu_xml, ['Cuenta', 'Account'],
-        allow_contains=False,
+    clicked_account = _acct_wait_tap(
+        d, ['Cuenta', 'Account'], allow_contains=False, timeout=35,
     )
 
     page_texts = []
@@ -2543,18 +2590,25 @@ def _scan_tidal_account(udid):
         return {'status': 'not_installed', 'detail': 'Tidal no esta instalado en este telefono.'}, ''
     try:
         d.app_start(pkg, 'com.aspiro.wamp.LoginFragmentActivity')
-        sleep(4)
+        sleep(2)
     except Exception as exc:
         return {'status': 'error', 'detail': f'No se pudo abrir Tidal: {exc}'}, ''
     home_texts, home_xml = _acct_dump(d)
     if _acct_has(home_texts, ('iniciar sesion', 'log in', 'sign in')):
         return {'status': 'not_logged_in', 'detail': 'Tidal no tiene una sesion iniciada.'}, ''
-    _acct_tap(d, home_xml, [], ['settings', 'configuracion', 'configuración'], ['SettingsButton'])
-    sleep(2)
+    # Settings puede tardar por red/proxy; esperar su boton en lugar de
+    # asumir que la pantalla Home ya termino de cargar.
+    if not _acct_wait_tap(
+            d, [], ['settings', 'configuracion', 'configuración'],
+            ['SettingsButton'], timeout=60):
+        return {'status': 'unknown', 'detail': 'Tidal no termino de cargar Ajustes.'}, '\n'.join(home_texts)
+    sleep(1)
     settings_texts, settings_xml = _acct_dump(d)
-    if not _acct_tap(d, settings_xml, ['Manage account', 'Administrar cuenta', 'Gestionar cuenta'], allow_contains=False):
+    if not _acct_wait_tap(
+            d, ['Manage account', 'Administrar cuenta', 'Gestionar cuenta'],
+            allow_contains=False, timeout=60):
         return {'status': 'unknown', 'detail': 'No se encontro Administrar cuenta en Tidal.'}, '\n'.join(settings_texts)
-    sleep(2)
+    sleep(1.5)
     texts, _xml = _acct_dump(d)
     joined = _acct_join(texts)
     # Una cuenta Premium muestra "Current plan" seguido del nombre del plan;
@@ -2664,6 +2718,16 @@ def _scan_apple_music_account(udid):
                 result['expires_raw'] = parsed.get('expires_raw') or ''
                 days = (datetime.strptime(parsed['expires_on'], '%Y-%m-%d').date() - datetime.now().date()).days
                 result['detail'] = f'Apple Music: renueva en {days} dia(s).'
+        except Exception:
+            pass
+    # StoreKit puede ocultar el correo al entrar a la renovacion; conservar el
+    # correo leido en una revision anterior en vez de borrarlo del panel.
+    if not result.get('email'):
+        try:
+            with app.app_context():
+                previous = AccountInfo.query.filter_by(udid=udid, app='apple_music').first()
+                if previous and previous.email:
+                    result['email'] = previous.email
         except Exception:
             pass
     if not premium and not free:
@@ -3322,7 +3386,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.0 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.1 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -5472,7 +5536,7 @@ def send_discord_webhook(interval, url):
                             }
                         ],
                         "footer": {
-                            "text": "SonicPush STA 5.3.0"
+                            "text": "SonicPush STA 5.3.1"
                         }
                     }
                 ],
