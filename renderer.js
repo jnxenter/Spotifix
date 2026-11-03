@@ -1204,7 +1204,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (!confirm('The app will update and restart. Continue?')) return;
                     installBtn.disabled = true;
                     installBtn.textContent = 'Updating...';
-                    statusDiv.innerHTML = '<p style="color: gray;">Downloading updated files...</p>';
+                    statusDiv.innerHTML = '<p style="color: gray;">Descargando y verificando el instalador firmado...</p>';
 
                     fetch('http://localhost:8999/install_update', {
                         method: 'POST',
@@ -1217,12 +1217,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     .then(r => r.json())
                     .then(data => {
                         if (data.success) {
-                            statusDiv.innerHTML = '<p style="color: #2ecc71;">Updated to v' + pendingRemoteVersion + '! Restarting...</p>';
-                            setTimeout(() => {
-                                if (window.electronAPI && window.electronAPI.restartApp) {
-                                    window.electronAPI.restartApp();
-                                }
-                            }, 1500);
+                            statusDiv.innerHTML = '<p style="color: #2ecc71;">Instalador v' + pendingRemoteVersion + ' verificado. La aplicación se cerrará y se abrirá el instalador.</p>';
+                            installBtn.textContent = 'Abriendo instalador...';
                         } else {
                             statusDiv.innerHTML = '<p style="color: red;">Error: ' + (data.error || 'Unknown') + '</p>';
                             installBtn.disabled = false;

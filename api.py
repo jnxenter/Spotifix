@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.1"
+Bot_version = "5.3.2"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -11530,6 +11530,83 @@ AUX_FILES_TO_UPDATE = [
 SOURCE_FILES_TO_UPDATE = CORE_FILES_TO_UPDATE + AUX_FILES_TO_UPDATE
 
 
+def _download_release_installer(remote_version):
+    """Descarga el instalador publicado y programa su apertura al cerrar la app.
+
+    Las actualizaciones que cambian api.exe no se pueden aplicar copiando
+    archivos fuente: el backend en uso es un binario empaquetado. Se descarga
+    exclusivamente el asset .exe de la Release solicitada y se valida el
+    SHA-256 que GitHub publica antes de ejecutarlo.
+    """
+    import ssl
+    import urllib.request
+
+    tag = str(remote_version or '').strip()
+    if not re.fullmatch(r'v?\d+(?:\.\d+){1,3}', tag):
+        raise ValueError('Versión de actualización inválida')
+    tag = 'v' + tag.lstrip('v')
+    ctx = ssl.create_default_context()
+    api_url = f'https://api.github.com/repos/{GITHUB_REPO}/releases/tags/{tag}'
+    req = urllib.request.Request(api_url, headers={'User-Agent': 'SonicPush-Installer-Updater'})
+    with urllib.request.urlopen(req, timeout=30, context=ctx) as response:
+        release = json.loads(response.read().decode('utf-8'))
+
+    assets = release.get('assets') or []
+    installer = next((a for a in assets if str(a.get('name', '')).lower().endswith('.exe')),
+                     None)
+    if not installer or not installer.get('browser_download_url'):
+        raise RuntimeError(f'La Release {tag} no contiene el instalador de Windows')
+    digest = str(installer.get('digest') or '')
+    if not digest.startswith('sha256:'):
+        raise RuntimeError('GitHub no publicó la firma SHA-256 del instalador')
+
+    temp_dir = os.path.join(os.environ.get('LOCALAPPDATA', os.environ.get('TEMP', project_dir)),
+                            'SonicPush', 'updates')
+    os.makedirs(temp_dir, exist_ok=True)
+    safe_name = re.sub(r'[^A-Za-z0-9._ -]', '_', str(installer.get('name')))
+    final_path = os.path.join(temp_dir, safe_name)
+    part_path = final_path + '.part'
+    hasher = hashlib.sha256()
+    download_req = urllib.request.Request(
+        installer['browser_download_url'], headers={'User-Agent': 'SonicPush-Installer-Updater'})
+    with urllib.request.urlopen(download_req, timeout=300, context=ctx) as response, open(part_path, 'wb') as out:
+        while True:
+            chunk = response.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            hasher.update(chunk)
+    actual_digest = hasher.hexdigest().lower()
+    expected_digest = digest.split(':', 1)[1].lower()
+    if actual_digest != expected_digest:
+        try:
+            os.remove(part_path)
+        except OSError:
+            pass
+        raise RuntimeError('La firma SHA-256 del instalador no coincide; actualización cancelada')
+    os.replace(part_path, final_path)
+    if os.path.getsize(final_path) < 1024 * 1024:
+        raise RuntimeError('El instalador descargado no es válido')
+
+    # El instalador debe abrirse cuando Electron haya soltado api.exe y el resto
+    # de archivos. El BAT vive fuera del directorio de instalación y se elimina.
+    launcher_path = os.path.join(temp_dir, f'_install_{tag}.cmd')
+    exe_name = 'SonicPush STA.exe'
+    launcher = (
+        '@echo off\r\n'
+        'timeout /t 3 /nobreak >nul\r\n'
+        f'taskkill /f /im "{exe_name}" >nul 2>&1\r\n'
+        f'start "" "{final_path}"\r\n'
+        'timeout /t 10 /nobreak >nul\r\n'
+        f'del /f /q "%~f0" >nul 2>&1\r\n'
+    )
+    with open(launcher_path, 'w', encoding='ascii', newline='') as launcher_file:
+        launcher_file.write(launcher)
+    subprocess.Popen(['cmd', '/c', launcher_path], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                     close_fds=True)
+    return {'installer': safe_name, 'version': tag.lstrip('v'), 'sha256': actual_digest}
+
+
 @app.route('/install_update', methods=['POST'])
 @require_token
 def install_update():
@@ -11537,6 +11614,19 @@ def install_update():
     remote_version = data.get("remote_version", "")
     if not remote_version:
         return jsonify({"success": False, "error": "No remote version provided"}), 400
+    try:
+        update = _download_release_installer(remote_version)
+        add_log('INFO', 'updater', f"Instalador v{update['version']} validado (SHA-256) y programado")
+        return jsonify({"success": True,
+                        "message": f"Instalador v{update['version']} listo. La aplicación se cerrará para instalarlo.",
+                        "installer_update": True,
+                        "sha256": update['sha256']})
+    except Exception as exc:
+        add_log('WARN', 'updater', f"No se pudo preparar el instalador: {exc}")
+        return jsonify({"success": False, "error": str(exc)}), 500
+
+    # Actualizador fuente heredado. Queda debajo sólo como referencia para
+    # instalaciones antiguas; las versiones nuevas siempre usan el instalador.
     try:
         import urllib.request
         import urllib.error
