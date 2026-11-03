@@ -1469,6 +1469,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (d.timezone) tzSelect.value = d.timezone;
                         renderRepeatState(d.repeat_daily);
                         renderTimerAccountCheck(d.account_check_on_stop);
+                        var startConfigEl = document.getElementById('timerStartConfig');
+                        if (startConfigEl) {
+                            startConfigEl.textContent = d.start_config_name
+                                ? 'Configuración para el inicio programado: ' + d.start_config_name
+                                : 'Configuración para el inicio programado: selecciona una en Home y pulsa Guardar y Activar.';
+                            startConfigEl.style.color = d.start_config_name ? '#5dade2' : '#f1c40f';
+                        }
                         var apps = d.timers || {};
                         ['all', 'spotify', 'tidal', 'apple'].forEach(ak => {
                             var info = apps[ak] || {};
@@ -1530,7 +1537,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         fetch('http://localhost:8999/set_timer', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + authToken },
-                            body: JSON.stringify({ app_key: ak, action: action, enabled: true, timezone: tzSelect.value, time: String(h24).padStart(2, '0') + ':' + mm })
+                            body: JSON.stringify({ app_key: ak, action: action, enabled: true, timezone: tzSelect.value, config_name: (document.getElementById('configSelect') || {}).value || '', time: String(h24).padStart(2, '0') + ':' + mm })
                         })
                         .then(r => r.json())
                         .then(d => { if (d.success) loadTimerState(); else statusDiv.innerHTML = '<span style="color:#e74c3c;">Error: ' + (d.error || 'Error') + '</span>'; })

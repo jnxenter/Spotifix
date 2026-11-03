@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.2"
+Bot_version = "5.3.3"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -347,6 +347,10 @@ config_search_links_perc = 0
 config_streaming_mode_only = False
 
 config_selected_apps = ['spotify']
+# La configuración que debe usar el temporizador para el inicio total. Nunca se
+# debe elegir por orden de archivos: puede iniciar un perfil distinto al que el
+# usuario dejó seleccionado en la interfaz.
+_timer_start_config_name = ''
 
 session_start_global = 0
 _multi_session_remaining = 0
@@ -3230,7 +3234,7 @@ def update_device():
 @app.route('/start_bot', methods=['POST'])
 @require_token
 def start_stop_bot():
-    global worker_bot_running
+    global worker_bot_running, _timer_start_config_name
     if worker_bot_running is False:
         try:
             data = request.json
@@ -3244,6 +3248,8 @@ def start_stop_bot():
 
             with open(config_path, 'r') as config_file:
                 config_data = json.load(config_file)
+            _timer_start_config_name = config_name
+            _save_timer_config()
 
             global config_streams_to_do
             global config_album_likes_rate
@@ -3386,7 +3392,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.1 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.3 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -10365,7 +10371,8 @@ def main_function(config_data):
         devices = list(dict.fromkeys([udid for udid, _, _, _ in all_devices]))
 
     if not devices:
-        print("No devices connected.")
+        worker_bot_running = False
+        add_log("WARN", "bot", "No hay teléfonos ADB conectados; el bot no se inició.")
         return
 
     global worker_devices_connected
@@ -10541,6 +10548,11 @@ def main_function(config_data):
                 stop_flags[thread_key] = False
                 worker_thread.start()
                 time.sleep(1)
+
+    if not worker_threads:
+        worker_bot_running = False
+        add_log("WARN", "bot", "No se inició ningún teléfono: revisa ADB, dispositivos guardados y apps instaladas.")
+        return
 
     while worker_bot_running:
         time.sleep(2)
@@ -10821,6 +10833,9 @@ _timer_repeat_daily = True
 # resultados ya viven en AccountInfo, por lo que permanecen visibles todo el
 # dia hasta el siguiente chequeo.
 _timer_account_check_on_stop = True
+# Se persiste para que el inicio programado use exactamente la configuración
+# seleccionada, incluso tras cerrar y abrir SonicPush.
+_timer_start_config_name = ''
 
 
 def _timer_cfg_path():
@@ -10848,6 +10863,7 @@ def _save_timer_config():
         ser["timezone"] = _per_app_timers["all"].get("timezone", "America/Mexico_City")
         ser["repeat_daily"] = bool(_timer_repeat_daily)
         ser["account_check_on_stop"] = bool(_timer_account_check_on_stop)
+        ser["start_config_name"] = _timer_start_config_name
         p = _timer_cfg_path()
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, 'w', encoding='utf-8') as f:
@@ -10875,9 +10891,12 @@ def _load_timer_config():
             t["start_triggered"] = False
         if "timezone" in ser:
             _per_app_timers["all"]["timezone"] = ser["timezone"]
-        global _timer_repeat_daily, _timer_account_check_on_stop
+        global _timer_repeat_daily, _timer_account_check_on_stop, _timer_start_config_name
         _timer_repeat_daily = bool(ser.get("repeat_daily", True))
         _timer_account_check_on_stop = bool(ser.get("account_check_on_stop", True))
+        saved_config = str(ser.get("start_config_name", "") or "").strip()
+        if saved_config:
+            _timer_start_config_name = saved_config
     except Exception:
         pass
 
@@ -11092,7 +11111,7 @@ def _start_timer_account_check():
 @app.route('/get_timer', methods=['GET'])
 @require_token
 def get_timer():
-    result = {"timers": {}, "timezone": _per_app_timers["all"].get("timezone", "America/Mexico_City"), "paused_apps": list(worker_app_paused), "log": _timer_log_entries[-30:], "repeat_daily": bool(_timer_repeat_daily), "account_check_on_stop": bool(_timer_account_check_on_stop)}
+    result = {"timers": {}, "timezone": _per_app_timers["all"].get("timezone", "America/Mexico_City"), "paused_apps": list(worker_app_paused), "log": _timer_log_entries[-30:], "repeat_daily": bool(_timer_repeat_daily), "account_check_on_stop": bool(_timer_account_check_on_stop), "start_config_name": _timer_start_config_name}
     for ak in ['all', 'spotify', 'tidal', 'apple']:
         t = _per_app_timers[ak]
         result["timers"][ak] = {
@@ -11118,6 +11137,7 @@ def set_timer_account_check():
 @app.route('/set_timer', methods=['POST'])
 @require_token
 def set_timer():
+    global _timer_start_config_name
     data = request.json or {}
     app_key = data.get("app_key", "all")
     if app_key not in _per_app_timers:
@@ -11125,6 +11145,9 @@ def set_timer():
     t = _per_app_timers[app_key]
     if "timezone" in data:
         _per_app_timers["all"]["timezone"] = data["timezone"]
+    requested_config = str(data.get("config_name", "") or "").strip()
+    if requested_config:
+        _timer_start_config_name = requested_config
     action = data.get("action")
     time_str = data.get("time")
     if action and time_str:
@@ -11207,7 +11230,7 @@ def cancel_timer():
 
 
 def _start_bot_by_timer():
-    global worker_bot_running
+    global worker_bot_running, _timer_start_config_name
     if worker_bot_running:
         add_log("WARN", "timer", "Bot ya está corriendo, saltando inicio por temporizador")
         return False
@@ -11222,8 +11245,14 @@ def _start_bot_by_timer():
             add_log("ERROR", "timer", "No config files found to start bot")
             _timer_log("ERROR: No config files found")
             return False
-        config_name = config_files[0].replace('.json', '')
-        config_path = os.path.join(configs_dir, config_files[0])
+        config_name = str(_timer_start_config_name or '').strip()
+        if not config_name:
+            _timer_log('ERROR: el temporizador no tiene una configuración seleccionada. Selecciona una y guarda el Inicio.')
+            return False
+        config_path = os.path.join(configs_dir, f'{config_name}.json')
+        if not os.path.isfile(config_path):
+            _timer_log(f'ERROR: configuración programada no encontrada: {config_name}')
+            return False
         add_log("INFO", "timer", f"Loading config: {config_name}")
         with open(config_path, 'r') as cf:
             config_data = json.load(cf)
@@ -11304,7 +11333,7 @@ def _start_bot_by_timer():
         worker_bot_running = True
         _reset_stop_flags()
         _start_rotation_keeper()
-        _timer_log(f"Bot starting with config {config_name}, apps: {config_selected_apps}")
+        _timer_log(f"Bot iniciando con configuración seleccionada {config_name}, apps: {config_selected_apps}")
         bot_thread = threading.Thread(target=main_function, args=(config_data,))
         bot_thread.start()
         return True
