@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.8"
+Bot_version = "5.3.9"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -291,6 +291,7 @@ class Link(db.Model):
 
 
 worker_bot_running = False
+bot_main_thread = None
 worker_threads = {}
 worker_napster_executable_path = None
 worker_streams_done = 0
@@ -3320,7 +3321,7 @@ def update_device():
 @app.route('/start_bot', methods=['POST'])
 @require_token
 def start_stop_bot():
-    global worker_bot_running, _timer_start_config_name
+    global worker_bot_running, _timer_start_config_name, bot_main_thread
     if worker_bot_running is False:
         try:
             data = request.json
@@ -3437,8 +3438,8 @@ def start_stop_bot():
             worker_bot_running = True
             _reset_stop_flags()
             _start_rotation_keeper()
-            bot_thread = threading.Thread(target=main_function, args=(config_data,))
-            bot_thread.start()
+            bot_main_thread = threading.Thread(target=main_function, args=(config_data,), name='bot-main')
+            bot_main_thread.start()
 
             return jsonify({"message": f"Bot started with config {config_name}"}), 200
         except Exception as e:
@@ -3447,40 +3448,10 @@ def start_stop_bot():
 
     else:
         try:
-            stop_flags['all'] = True
-            for udid in list(stop_flags.keys()):
-                stop_flags[udid] = True
-
-            # main_function puede estar agregando hilos mientras se pulsa Stop.
-            # Tomar una copia evita "dictionary changed size during iteration".
-            for thread_info in list(worker_threads.values()):
-                thread = thread_info.get("thread")
-                if thread and thread.is_alive():
-                    thread.join(timeout=45)
-
-            worker_threads.clear()
-            _reset_stop_flags()
-            worker_bot_running = False
-
-            apps_to_close = ['com.spotify.music', 'com.aspiro.tidal', 'com.apple.android.music']
-            try:
-                result = subprocess.run([adb_path, 'devices', '-l'], stdout=subprocess.PIPE, text=True, startupinfo=startupinfo)
-                lines = result.stdout.strip().split('\n')[1:]
-                for line in lines:
-                    if '\tdevice' not in line and '   device ' not in line:
-                        continue
-                    udid = line.split()[0]
-                    for pkg in apps_to_close:
-                        try:
-                            subprocess.run([adb_path, '-s', udid, 'shell', 'am', 'force-stop', pkg],
-                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5, startupinfo=startupinfo)
-                        except:
-                            pass
-            except:
-                pass
+            _stop_bot()
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.8 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.9 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
@@ -9684,13 +9655,13 @@ def _multi_app_monitor_all(selected_apps_keys, udid, session_time_seconds, binde
         app_last_paused_kill[app_key] = 0
 
     while (time.time() - session_start) < session_time_seconds:
-        if stop_flags.get(udid) or stop_flags.get(f"{udid}_multiapp"):
+        if _stop_requested(udid):
             break
 
         now = time.time()
 
         for app_key in selected_apps_keys:
-            if stop_flags.get(udid) or stop_flags.get(f"{udid}_multiapp"):
+            if _stop_requested(udid):
                 break
             if stop_flags.get(f"{udid}_{app_key}"):
                 continue
@@ -10133,7 +10104,7 @@ def _relay_full_session(apps, udid, session_sec, binded_account, binded_proxy, c
     session_start = time.time()
     idx = 0
     while (time.time() - session_start) < session_sec:
-        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+        if _stop_requested(udid):
             break
         app_key = order[idx % len(order)]
         idx += 1
@@ -10151,17 +10122,17 @@ def _relay_full_session(apps, udid, session_sec, binded_account, binded_proxy, c
                     _stop_app_via_adb(udid, SUPPORTED_APPS[other]['package'])
                 except Exception:
                     pass
-        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+        if _stop_requested(udid):
             break
         try:
             _multi_app_start_all([app_key], udid, binded_account, binded_proxy, conn_type, acc_type)
-            if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+            if _stop_requested(udid):
                 break
             _multi_app_monitor_all([app_key], udid, turn_sec, binded_proxy, conn_type)
             add_log("INFO", udid, f"[Relay] [{display_name}] turn finished, switching platform...")
         except Exception as e:
             add_log("ERR.", udid, f"[Relay] [{display_name}] turn error: {e}")
-        if not (stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid)):
+        if not _stop_requested(udid):
             time.sleep(random.uniform(4, 10))
     add_log("INFO", udid, "[Relay] Relay session time ended, stopping all apps...")
     for app_key in apps:
@@ -10226,7 +10197,7 @@ def single_clone_automation_flow(d, udid, spotify_pkgs, session_time_seconds, se
             disable_autoplay(d, udid, pkg)
 
         pkg_start_time = time.time()
-        while (time.time() - pkg_start_time) < session_time_seconds and not stop_flags.get(udid) and not stop_flags.get(f"{udid}_multiapp"):
+        while (time.time() - pkg_start_time) < session_time_seconds and not _stop_requested(udid):
             ppa = 9999999
             update_thread_status(udid, f'[{display_name}] Running', None, False, False, False, False, False, None)
             ensure_screen_on(d)
@@ -10259,7 +10230,7 @@ def single_clone_automation_flow(d, udid, spotify_pkgs, session_time_seconds, se
                         else:
                             add_log("ERR.", udid, msg)
 
-            while not stop_flags.get(udid) and not stop_flags.get(f"{udid}_multiapp"):
+            while not _stop_requested(udid):
                 freeze_rotation_port(d)
                 if is_spotify:
                     if restart_spotify_if_crashed(d, True, pkg) is True:
@@ -10467,6 +10438,10 @@ def main_function(config_data):
     worker_devices_connected = len(devices)
 
     for i, udid in enumerate(devices):
+        # Una parada puede ocurrir mientras se inicializa el siguiente equipo.
+        # No crear nuevos workers ni abrir apps después de recibirla.
+        if not worker_bot_running or _stop_requested(udid):
+            break
         connection_type = "TCP/IP" if is_tcpip_device(udid) else "USB"
 
         with app.app_context():
@@ -10539,13 +10514,13 @@ def main_function(config_data):
 
             def _multi_app_thread_wrapper(udid, apps, session_sec, binded_account, binded_proxy, conn_type, acc_type):
                 while True:
-                    if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                    if _stop_requested(udid):
                         break
                     validation_ok = None
                     if udid in proxy_blocked_devices:
                         add_log("WARN", udid, "[Proxy] Device blocked due to proxy failure. Waiting 60s before next round...")
                         time.sleep(60)
-                        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                        if _stop_requested(udid):
                             break
                         add_log("INFO", udid, "[Proxy] Retrying proxy validation for blocked device...")
                         try:
@@ -10564,13 +10539,13 @@ def main_function(config_data):
                             if not _validate_device_proxy(udid, binded_proxy, conn_type):
                                 add_log("ERR.", udid, "[Proxy] Proxy validation failed. Device stopped for this round; will retry.")
                                 continue
-                        if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                        if _stop_requested(udid):
                             break
                         if config_play_mode == 'relay':
                             _relay_full_session(apps, udid, session_sec, binded_account, binded_proxy, conn_type, acc_type)
                         else:
                             _multi_app_start_all(apps, udid, binded_account, binded_proxy, conn_type, acc_type)
-                            if stop_flags.get(f"{udid}_multiapp") or stop_flags.get(udid):
+                            if _stop_requested(udid):
                                 break
                             _multi_app_monitor_all(apps, udid, session_sec, binded_proxy, conn_type)
                             for app_key in apps:
@@ -11334,7 +11309,7 @@ def cancel_timer():
 
 
 def _start_bot_by_timer():
-    global worker_bot_running, _timer_start_config_name
+    global worker_bot_running, _timer_start_config_name, bot_main_thread
     if worker_bot_running:
         add_log("WARN", "timer", "Bot ya está corriendo, saltando inicio por temporizador")
         return False
@@ -11447,8 +11422,8 @@ def _start_bot_by_timer():
         _reset_stop_flags()
         _start_rotation_keeper()
         _timer_log(f"Bot iniciando con configuración seleccionada {config_name}, apps: {config_selected_apps}")
-        bot_thread = threading.Thread(target=main_function, args=(config_data,))
-        bot_thread.start()
+        bot_main_thread = threading.Thread(target=main_function, args=(config_data,), name='bot-main')
+        bot_main_thread.start()
         # No confirmar inicio hasta que main_function haya creado al menos un
         # hilo para teléfono. Evita el falso “iniciado correctamente” si una
         # configuración inválida o un error temprano mata el hilo principal.
@@ -11542,18 +11517,22 @@ _timer_thread.start()
 
 
 def _stop_bot():
-    global worker_bot_running
+    global worker_bot_running, bot_main_thread
     try:
         for thread_number in list(worker_threads.keys()):
             stop_flags[thread_number] = True
         stop_flags['all'] = True
+        # Marcarlo antes de esperar: main_function puede estar todavía
+        # preparando el siguiente teléfono y no debe crear nuevos workers.
+        worker_bot_running = False
+        main_thread = bot_main_thread
+        if main_thread and main_thread.is_alive() and main_thread is not threading.current_thread():
+            main_thread.join(timeout=20)
         for thread_info in list(worker_threads.values()):
             thread = thread_info.get("thread")
             if thread and thread.is_alive():
                 thread.join(timeout=45)
         worker_threads.clear()
-        _reset_stop_flags()
-        worker_bot_running = False
         worker_app_paused.clear()
         proxy_blocked_devices.clear()
         # OJO: los temporizadores por app NO se desactivan aquí. Antes se
