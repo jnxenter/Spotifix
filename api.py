@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.4"
+Bot_version = "5.3.5"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -2469,10 +2469,16 @@ def _scan_spotify_account(udid):
             pkg_now, _act_now = _acct_activity(d)
             if pkg_now and pkg_now != 'com.spotify.music':
                 opened_external = True
-                # La cuenta tambien puede abrirse en el navegador: se lee
-                # igual y luego se vuelve a Spotify sin cerrar nada.
-                sleep(3)
-                page_texts, _ = _acct_dump(d)
+                # Nunca se lee ni se interactúa con el navegador. Volver a
+                # Spotify conserva la sesión y mantiene la revisión app-only.
+                try:
+                    d.press('back')
+                    sleep(1.5)
+                    if _acct_activity(d)[0] != 'com.spotify.music':
+                        d.app_start('com.spotify.music', '.MainActivity')
+                except Exception:
+                    pass
+                page_texts = []
                 break
             page_texts = texts_now
             if _acct_is_account_page(texts_now):
@@ -2480,39 +2486,85 @@ def _scan_spotify_account(udid):
                 page_texts, _ = _acct_dump(d)
                 break
 
-    # 3) La pagina interna muestra correo y plan. La expiracion de la prueba
-    # se lee sin salir de Spotify: Perfil > Tu Premium. No se abre navegador.
+    # 3) La pagina interna muestra correo y plan. La fecha puede estar en
+    # Facturación > Ver detalles o en Perfil > Tu Premium según versión/cuenta.
+    # Ambos recorridos son solo de lectura y nunca pulsan cancelar/cerrar sesión.
     premium_texts = []
+    billing_texts = []
+
+    def _spotify_collect_renewal(seed=None, timeout=35):
+        collected = list(seed or [])
+        renewal_words = (
+            'termina', 'finaliza', 'vence', 'vencimiento', 'caduca',
+            'ends', 'expires', 'expiry', 'renew', 'renueva', 'renewal',
+            'proxima factura', 'proximo cobro', 'next payment',
+            'next billing', 'billing date', 'fecha de facturacion',
+        )
+        deadline = time.time() + timeout
+        attempts = 0
+        while time.time() < deadline:
+            sleep(1.3)
+            current, _current_xml = _acct_dump(d)
+            collected += [t for t in current if t not in collected]
+            if _acct_has(collected, renewal_words):
+                break
+            # Algunas variantes muestran la factura abajo de la tarjeta de plan.
+            if attempts in (2, 5):
+                try:
+                    d.swipe(540, 1700, 540, 650, duration=0.35)
+                except Exception:
+                    pass
+            attempts += 1
+        return collected
+
     if clicked_account and page_texts and account_checker is not None:
         preliminary = account_checker.parse_account_texts(
             page_texts, hint_free=hint_free,
         )
         if preliminary.get('is_premium') and not preliminary.get('expires_on'):
-            _acct_return_home(d)
-            sleep(1.5)
-            _home_texts, home_xml = _acct_dump(d)
-            _acct_tap(
-                d, home_xml, [],
-                ['ir al perfil y a la configuracion', 'go to profile and settings'],
-                ['com.spotify.music:id/faceheader'],
+            # Primera ruta: desde Cuenta abrir los detalles de facturación.
+            billing_clicked = _acct_wait_tap(
+                d,
+                ['Ver detalles', 'View details', 'Billing details',
+                 'Detalles de facturación', 'Detalles de facturacion'],
+                ['ver detalles', 'view details', 'billing details'],
+                allow_contains=True, timeout=20,
             )
-            sleep(2)
-            drawer_texts, drawer_xml = _acct_dump(d)
-            clicked_premium = _acct_tap(
-                d, drawer_xml, ['Tu Premium', 'Your Premium'],
-                ['tu premium', 'your premium'], allow_contains=False,
+            if billing_clicked:
+                billing_texts = _spotify_collect_renewal(timeout=35)
+
+            # Segunda ruta: la tarjeta Tu Premium que usan otras versiones.
+            preliminary_texts = page_texts + billing_texts
+            preliminary = account_checker.parse_account_texts(
+                preliminary_texts, hint_free=hint_free,
+            )
+        if preliminary.get('is_premium') and not preliminary.get('expires_on'):
+            _acct_return_home(d)
+            _spotify_force_home(d, timeout=30)
+            sleep(1.5)
+            _acct_wait_tap(
+                d, [],
+                ['ir al perfil y a la configuracion', 'go to profile and settings'],
+                ['com.spotify.music:id/faceheader', 'com.spotify.music:id/faceheader_image'],
+                timeout=30,
+            )
+            clicked_premium = _acct_wait_tap(
+                d, ['Tu Premium', 'Your Premium', 'Premium'],
+                ['tu premium', 'your premium'], allow_contains=False, timeout=30,
             )
             if clicked_premium:
-                deadline = time.time() + 15
-                while time.time() < deadline:
-                    sleep(1.5)
-                    texts_now, _xml_now = _acct_dump(d)
-                    premium_texts = texts_now or premium_texts
-                    if _acct_has(texts_now, (
-                        'termina', 'finaliza', 'vence', 'vencimiento',
-                        'ends', 'expires', 'renew', 'renueva', 'proxima factura',
-                    )):
-                        break
+                premium_texts = _spotify_collect_renewal(timeout=35)
+                if not account_checker.parse_account_texts(page_texts + billing_texts + premium_texts,
+                                                           hint_free=hint_free).get('expires_on'):
+                    # Algunas variantes de Tu Premium también esconden el dato
+                    # tras Ver detalles / Billing details.
+                    if _acct_wait_tap(
+                            d, ['Ver detalles', 'View details', 'Billing details',
+                                'Detalles de facturación', 'Detalles de facturacion'],
+                            ['ver detalles', 'view details', 'billing details'],
+                            allow_contains=True, timeout=15):
+                        premium_texts += [t for t in _spotify_collect_renewal(timeout=30)
+                                          if t not in premium_texts]
 
     # El correo que tenga guardado la app sirve de respaldo si la pagina de
     # cuenta no lo muestra; el plan que se lea en el telefono manda.
@@ -2530,7 +2582,7 @@ def _scan_spotify_account(udid):
         pass
 
     if account_checker is not None:
-        source_texts = ((page_texts or []) + (premium_texts or [])) or (menu_texts + base_texts)
+        source_texts = ((page_texts or []) + (billing_texts or []) + (premium_texts or [])) or (menu_texts + base_texts)
         result = account_checker.parse_account_texts(
             source_texts,
             hint_free=hint_free,
@@ -2665,25 +2717,46 @@ def _scan_apple_music_account(udid):
     if not _acct_wait_tap(d, ['Cuenta', 'Account'], allow_contains=False, timeout=60):
         return {'status': 'unknown', 'detail': 'No se encontro Cuenta en Apple Music.'}, '\n'.join(menu_texts)
     # Esperar hasta que cargue la seccion Suscripcion, no solo la cabecera.
+    # En algunos equipos Apple deja visibles primero los datos del perfil
+    # (incluido el correo) y carga Suscripción después o fuera de pantalla.
+    subscription_markers = (
+        'gestionar suscripcion', 'manage subscription', 'manage plan',
+        'suscripcion', 'subscription', 'suscribirse ahora', 'subscribe now',
+        'start listening', 'free trial', 'prueba gratis',
+    )
     texts, account_xml = [], ''
     deadline = time.time() + 60
     while time.time() < deadline:
         sleep(1.2)
         texts, account_xml = _acct_dump(d)
         joined_now = _acct_join(texts)
-        if any(k in joined_now for k in (
-            'gestionar suscripcion', 'manage subscription',
-            'suscribirse ahora', 'subscribe now',
-        )):
+        if any(k in joined_now for k in subscription_markers):
             break
+    # Probar desplazamiento adaptativo: los diseños de Apple Music no colocan
+    # Suscripción en la misma altura en todos los dispositivos/idiomas.
+    joined_now = _acct_join(texts)
+    if not any(k in joined_now for k in subscription_markers):
+        for _ in range(4):
+            try:
+                d.swipe(540, 1700, 540, 650, duration=0.35)
+                sleep(1.2)
+                more_texts, account_xml = _acct_dump(d)
+                texts = texts + [t for t in more_texts if t not in texts]
+                if any(k in _acct_join(texts) for k in subscription_markers):
+                    break
+            except Exception:
+                break
     # En Premium, se abre primero "Gestionar suscripcion" mientras aun es
     # visible. Despues se vuelve a Cuenta y se baja para leer el correo.
     # Esto evita que una variacion de scroll oculte el boton antes de usarlo.
     initial_joined = _acct_join(texts)
-    premium = ('gestionar suscripcion' in initial_joined
-               or 'manage subscription' in initial_joined)
+    premium = any(k in initial_joined for k in (
+        'gestionar suscripcion', 'manage subscription', 'manage plan',
+    ))
     if premium:
-        if _acct_wait_tap(d, ['Gestionar suscripción', 'Manage subscription'], allow_contains=False, timeout=60):
+        if _acct_wait_tap(d, [
+                'Gestionar suscripción', 'Manage subscription', 'Manage plan',
+            ], allow_contains=True, timeout=60):
             # Esta vista carga los datos de StoreKit de forma asincrona; no
             # se acepta el primer dump si solo contiene "Cargando/Loading".
             deadline = time.time() + 60
@@ -2711,12 +2784,16 @@ def _scan_apple_music_account(udid):
     except Exception:
         pass
     joined = _acct_join(texts)
-    premium = premium or 'gestionar suscripcion' in joined or 'manage subscription' in joined
-    free = ('suscribirse ahora' in joined or 'subscribe now' in joined
-            or 'start listening' in joined)
+    premium = premium or any(k in joined for k in (
+        'gestionar suscripcion', 'manage subscription', 'manage plan',
+    ))
+    free = any(k in joined for k in (
+        'suscribirse ahora', 'subscribe now', 'start listening',
+        'free trial', 'prueba gratis',
+    ))
     result = _account_result_from_plan(
         texts, 'Premium' if premium else 'Free' if free else '', premium,
-        'Apple Music: suscripcion activa.' if premium else 'Apple Music Free (sin suscripcion activa).' if free else 'No se pudo determinar la suscripcion de Apple Music.',
+        'Apple Music: suscripcion activa.' if premium else 'Apple Music Free (sin suscripcion activa).' if free else 'Apple Music no terminó de mostrar la suscripción; se reintentará en la próxima revisión.',
     )
     if premium and account_checker is not None:
         try:
@@ -2935,7 +3012,7 @@ def _start_account_scan(udids=None, trigger='manual', force=False, app_key='spot
         })
     thread = threading.Thread(
         target=_account_scan_worker,
-        args=(list(udids) if udids else None, bool(force), app_key),
+        args=(list(udids) if udids else None, bool(force), app_key, trigger),
         daemon=True,
         name='account-scan',
     )
@@ -2943,7 +3020,7 @@ def _start_account_scan(udids=None, trigger='manual', force=False, app_key='spot
     return True, 'Escaneo iniciado.'
 
 
-def _account_scan_worker(udids, force, app_key='spotify'):
+def _account_scan_worker(udids, force, app_key='spotify', trigger='manual'):
     errors = []
     try:
         online = _auth_online_serials()
@@ -2953,11 +3030,12 @@ def _account_scan_worker(udids, force, app_key='spotify'):
                 canonical = _canonical_serial(udid, online)
                 if canonical and canonical not in targets:
                     targets.append(canonical)
-        elif app_key in ('tidal', 'apple_music'):
+        elif app_key in ('tidal', 'apple_music') and trigger == 'auto' and not force:
             # Estas apps pueden estar instaladas en todos los equipos sin que
-            # todos tengan cuenta. Despues del primer descubrimiento se
-            # revisan solo las cuentas reales ya encontradas, evitando esperar
-            # hasta 60 s por cada telefono sin sesion.
+            # todos tengan cuenta. En el ciclo automático se revisan solo las
+            # cuentas ya descubiertas, evitando esperar hasta 60 s por cada
+            # teléfono sin sesión. Una revisión manual o del temporizador SIEMPRE
+            # debe pasar por todos los equipos conectados.
             with app.app_context():
                 known_rows = AccountInfo.query.filter(
                     AccountInfo.app == app_key,
@@ -3398,7 +3476,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.4 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.5 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200
