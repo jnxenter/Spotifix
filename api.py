@@ -95,7 +95,7 @@ db = SQLAlchemy(app)
 
 Bot_name = "SonicPush STA"
 global_bot_name = "SonicPush STA"
-Bot_version = "5.3.3"
+Bot_version = "5.3.4"
 GITHUB_REPO = "jnxenter/Spotifix"
 backend_state = 'Initializing...'
 akey = 'jonex program key'.encode('utf-8')
@@ -2627,6 +2627,12 @@ def _scan_tidal_account(udid):
         texts, plan or 'Free', premium,
         f'Tidal: {plan}' if premium else 'Tidal Free (sin plan activo).',
     )
+    # La app Android de Tidal muestra el plan actual, pero no la fecha de
+    # facturación/renovación. Señalarlo explícitamente evita que el panel lo
+    # presente como un Premium normal con vencimiento perdido.
+    if premium and not result.get('expires_on'):
+        result['status'] = 'premium_no_date'
+        result['detail'] = 'Tidal tiene un plan activo, pero su app no expone la fecha de renovación.'
     try:
         d.press('back')
         sleep(1)
@@ -3392,7 +3398,7 @@ def start_stop_bot():
                 pass
 
             ConsoleLogger.log_array.clear()
-            ConsoleLogger.log_array.append('SonicPush STA 5.3.3 - [Console Logs]')
+            ConsoleLogger.log_array.append('SonicPush STA 5.3.4 - [Console Logs]')
             ConsoleLogger.log_array.append('<---------------------------------------->')
             ConsoleLogger.log_array.append(' ')
             return jsonify({"message": "Bot stopped"}), 200

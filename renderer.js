@@ -1781,6 +1781,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
             function accountsStatusInfo(account) {
                 const status = account.status || 'unknown';
+                if (account.app === 'tidal' && account.is_premium && !account.expires_on) {
+                    return { label: 'Plan activo · sin fecha', cls: 'warn' };
+                }
                 if (account.is_premium && account.days_left != null && account.days_left <= 7) {
                     return { label: account.days_left < 0 ? 'Vencida' : `Vence en ${account.days_left} día(s)`, cls: account.days_left < 0 ? 'err' : 'warn' };
                 }
@@ -1851,6 +1854,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             const txt = a.days_left < 0 ? 'vencida' : `en ${a.days_left} día(s)`;
                             expires += `<div class="accounts-sub" style="color:${tone};">${txt}</div>`;
                         }
+                    } else if (a.app === 'tidal' && a.is_premium) {
+                        expires = '<span style="color:#ffcc66;">No disponible en Tidal</span><div class="accounts-sub">La app no muestra renovación</div>';
                     }
 
                     return `<tr title="${accountsEsc(a.detail || '')}">
